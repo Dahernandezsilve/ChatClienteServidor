@@ -73,14 +73,18 @@ int main(int argc, char *argv[]) {
 
     pthread_t receiveThread;
     pthread_create(&receiveThread, NULL, receiveMessages, NULL);
+    pthread_detach(receiveThread);
 
     char message[MAX_MESSAGE_SIZE];
+
     while (1) {
         fgets(message, sizeof(message), stdin);
-        message[strcspn(message, "\n")] = 0;
+        message[strcspn(message, "\n")] = '\0'; // Eliminar el salto de línea
 
         if (strcmp(message, "/exit") == 0) {
             handleExit();
+        } else if (strcmp(message, "/list") == 0) {
+            sendMessage("/list");
         } else {
             sendMessage(message);
         }

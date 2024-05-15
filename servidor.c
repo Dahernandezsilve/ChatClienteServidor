@@ -37,6 +37,17 @@ void removeUser(const char* username) {
     pthread_mutex_unlock(&userLock);
 }
 
+void getUserList(int clientSocket) {
+    pthread_mutex_lock(&userLock);
+    char userList[MAX_CLIENT_MESSAGE_SIZE] = "Usuarios conectados:\n";
+    for (int i = 0; i < userCount; ++i) {
+        strcat(userList, users[i].username);
+        strcat(userList, "\n");
+    }
+    pthread_mutex_unlock(&userLock);
+    sendMessage(clientSocket, userList);
+}
+
 void* handleClient(void* arg) {
     int clientSocket = *(int*)arg;
     free(arg);
@@ -84,10 +95,16 @@ void* handleClient(void* arg) {
 
     printf("Usuario registrado: %s desde %s\n", username, clientIp);
 
-    // Leer más mensajes del cliente si es necesario
+    // Leer más mensajes del cliente
     while ((bytesReceived = recv(clientSocket, buffer, sizeof(buffer) - 1, 0)) > 0) {
         buffer[bytesReceived] = '\0';
-        printf("Mensaje recibido de %s: %s\n", username, buffer);
+
+        // Verificar si el cliente solicita el listado de usuarios
+        if (strcmp(buffer, "/list") == 0) {
+            getUserList(clientSocket);
+        } else {
+            printf("Mensaje recibido de %s: %s\n", username, buffer);
+        }
     }
 
     // Eliminar usuario de la lista al desconectarse
@@ -153,7 +170,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        printf("Intento de conexion\n");
+        printf("Intento de conexión\n");
 
         // Crear un hilo para manejar la conexión con el cliente
         pthread_t thread;
