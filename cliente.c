@@ -2,76 +2,89 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <pthread.h>
 
+#define MAX_MESSAGE_SIZE 1024
 
-#define MAX_SERVER_RESPONSE_SIZE 1024
+int serverSocket;
+char username[50];
+
+void* receiveMessages(void* arg) {
+    char buffer[MAX_MESSAGE_SIZE];
+    ssize_t bytesReceived;
+
+    while ((bytesReceived = recv(serverSocket, buffer, sizeof(buffer) - 1, 0)) > 0) {
+        buffer[bytesReceived] = '\0';
+        printf("%s\n", buffer);
+        if (strstr(buffer, "Error: Nombre de usuario ya en uso") != NULL) {
+            close(serverSocket);
+            exit(1);
+        }
+    }
+
+    return NULL;
+}
+
+void sendMessage(const char* message) {
+    send(serverSocket, message, strlen(message), 0);
+}
+
+void handleExit() {
+    sendMessage(username); // Enviar el nombre de usuario para desconectar
+    close(serverSocket);
+    printf("Desconectado del servidor\n");
+    exit(0);
+}
 
 int main(int argc, char *argv[]) {
     if (argc != 4) {
-        fprintf(stderr, "Uso: %s <nombre_de_usuario> <ip_del_servidor> <puerto_del_servidor>\n", argv[0]);
+        fprintf(stderr, "Uso: %s <nombredeusuario> <IPdelservidor> <puertodelservidor>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    const char *username = argv[1];
-    const char *serverIp = argv[2];
-    int port = atoi(argv[3]);
-    if (port <= 0) {
-        fprintf(stderr, "Puerto inválido\n");
+    strcpy(username, argv[1]);
+    char* serverIp = argv[2];
+    int serverPort = atoi(argv[3]);
+
+    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (serverSocket < 0) {
+        perror("Error al crear el socket");
         exit(EXIT_FAILURE);
     }
 
-    int clientSocket;
     struct sockaddr_in serverAddr;
-
-    // Crear socket
-    clientSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (clientSocket < 0) {
-        perror("Error al crear el socket del cliente");
-        exit(EXIT_FAILURE);
-    }
-
-    // Configurar dirección del servidor
     memset(&serverAddr, 0, sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(port);
+    serverAddr.sin_port = htons(serverPort);
+
     if (inet_pton(AF_INET, serverIp, &serverAddr.sin_addr) <= 0) {
         perror("Dirección del servidor inválida");
         exit(EXIT_FAILURE);
     }
 
-    // Conectar al servidor
-    if (connect(clientSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
-        perror("Error al conectar al servidor");
+    if (connect(serverSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
+        perror("Error al conectar con el servidor");
         exit(EXIT_FAILURE);
     }
 
-    printf("Conectado al servidor\n");
+    sendMessage(username); // Enviar el nombre de usuario para registrar
 
-    // Enviar nombre de usuario al servidor
-    if (send(clientSocket, username, strlen(username), 0) < 0) {
-        perror("Error al enviar nombre de usuario al servidor");
-        exit(EXIT_FAILURE);
+    pthread_t receiveThread;
+    pthread_create(&receiveThread, NULL, receiveMessages, NULL);
+
+    char message[MAX_MESSAGE_SIZE];
+    while (1) {
+        fgets(message, sizeof(message), stdin);
+        message[strcspn(message, "\n")] = 0;
+
+        if (strcmp(message, "/exit") == 0) {
+            handleExit();
+        } else {
+            sendMessage(message);
+        }
     }
-
-    printf("Nombre de usuario enviado al servidor: %s\n", username);
-
-    // Enviar mensaje al servidor (aquí puedes agregar la lógica para enviar mensajes adicionales)
-
-    // Leer respuesta del servidor
-    char buffer[MAX_SERVER_RESPONSE_SIZE];
-    ssize_t bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
-    if (bytesReceived < 0) {
-        perror("Error al recibir respuesta del servidor");
-        exit(EXIT_FAILURE);
-    }
-
-    printf("Respuesta del servidor: %s\n", buffer);
-
-    // Cerrar el socket del cliente
-    close(clientSocket);
 
     return 0;
 }

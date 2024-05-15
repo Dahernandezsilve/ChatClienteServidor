@@ -3,35 +3,100 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <arpa/inet.h> // Incluye inet_pton
+#include <arpa/inet.h>
 #include <unistd.h>
+#include <pthread.h>
 
-#define DEFAULT_IP "127.0.0.1"  // Dirección IP por defecto
+#define DEFAULT_IP "127.0.0.1"
 #define MAX_PENDING_CONNECTIONS 5
 #define MAX_CLIENT_MESSAGE_SIZE 1024
+#define MAX_USERS 100
 
-void handleClient(int clientSocket) {
+typedef struct {
+    char username[50];
+    char ip[INET_ADDRSTRLEN];
+} User;
+
+User users[MAX_USERS];
+int userCount = 0;
+pthread_mutex_t userLock = PTHREAD_MUTEX_INITIALIZER;
+
+void sendMessage(int socket, const char* message) {
+    send(socket, message, strlen(message), 0);
+}
+
+void removeUser(const char* username) {
+    pthread_mutex_lock(&userLock);
+    for (int i = 0; i < userCount; ++i) {
+        if (strcmp(users[i].username, username) == 0) {
+            users[i] = users[userCount - 1];
+            userCount--;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&userLock);
+}
+
+void* handleClient(void* arg) {
+    int clientSocket = *(int*)arg;
+    free(arg);
+
     char buffer[MAX_CLIENT_MESSAGE_SIZE];
     ssize_t bytesReceived;
 
-    // Leer datos del cliente
-    bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
+    // Leer el nombre de usuario del cliente
+    bytesReceived = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
     if (bytesReceived < 0) {
         perror("Error al recibir datos del cliente");
         close(clientSocket);
-        return;
+        return NULL;
+    }
+    buffer[bytesReceived] = '\0';
+
+    char username[50];
+    strncpy(username, buffer, sizeof(username));
+    username[sizeof(username) - 1] = '\0';
+
+    char clientIp[INET_ADDRSTRLEN];
+    struct sockaddr_in addr;
+    socklen_t addr_size = sizeof(struct sockaddr_in);
+    getpeername(clientSocket, (struct sockaddr*)&addr, &addr_size);
+    inet_ntop(AF_INET, &addr.sin_addr, clientIp, INET_ADDRSTRLEN);
+
+    // Verificar si el usuario ya está registrado
+    pthread_mutex_lock(&userLock);
+    for (int i = 0; i < userCount; ++i) {
+        if (strcmp(users[i].username, username) == 0) {
+            sendMessage(clientSocket, "Error: Nombre de usuario ya en uso");
+            pthread_mutex_unlock(&userLock);
+            close(clientSocket);
+            return NULL;
+        }
     }
 
-    printf("Mensaje recibido del cliente: %s\n", buffer);
+    // Registrar al nuevo usuario
+    strcpy(users[userCount].username, username);
+    strcpy(users[userCount].ip, clientIp);
+    userCount++;
+    pthread_mutex_unlock(&userLock);
 
-    // Enviar respuesta al cliente
-    const char* responseMessage = "Mensaje recibido por el servidor";
-    if (send(clientSocket, responseMessage, strlen(responseMessage), 0) < 0) {
-        perror("Error al enviar datos al cliente");
+    sendMessage(clientSocket, "Registro exitoso");
+
+    printf("Usuario registrado: %s desde %s\n", username, clientIp);
+
+    // Leer más mensajes del cliente si es necesario
+    while ((bytesReceived = recv(clientSocket, buffer, sizeof(buffer) - 1, 0)) > 0) {
+        buffer[bytesReceived] = '\0';
+        printf("Mensaje recibido de %s: %s\n", username, buffer);
     }
 
-    // Cerrar el socket del cliente
+    // Eliminar usuario de la lista al desconectarse
+    removeUser(username);
+
+    printf("Usuario desconectado: %s\n", username);
+
     close(clientSocket);
+    return NULL;
 }
 
 int main(int argc, char *argv[]) {
@@ -88,10 +153,19 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        printf("Cliente conectado\n");
+        printf("Intento de conexion\n");
 
-        // Manejar la conexión con el cliente
-        handleClient(clientSocket);
+        // Crear un hilo para manejar la conexión con el cliente
+        pthread_t thread;
+        int* clientSocketPtr = malloc(sizeof(int));
+        *clientSocketPtr = clientSocket;
+        if (pthread_create(&thread, NULL, handleClient, clientSocketPtr) != 0) {
+            perror("Error al crear el hilo");
+            close(clientSocket);
+            free(clientSocketPtr);
+        } else {
+            pthread_detach(thread); // Desvincular el hilo para que se limpie solo al finalizar
+        }
     }
 
     // Cerrar el socket del servidor
