@@ -1,94 +1,173 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
 #include <unistd.h>
-#include <pthread.h>
+#include <arpa/inet.h>
+#include <protobuf-c/protobuf-c.h>
+#include "chat.pb-c.h"
 
-#define MAX_MESSAGE_SIZE 1024
+#define BUFFER_SIZE 1024
 
-int serverSocket;
-char username[50];
+void send_request(int sock, Chat__Request *request) {
+    uint8_t buffer[BUFFER_SIZE];
+    unsigned len = chat__request__pack(request, buffer);
 
-void* receiveMessages(void* arg) {
-    char buffer[MAX_MESSAGE_SIZE];
-    ssize_t bytesReceived;
+    printf("Sending request, operation: %d, length: %u\n", request->operation, len); // Depuración
 
-    while ((bytesReceived = recv(serverSocket, buffer, sizeof(buffer) - 1, 0)) > 0) {
-        buffer[bytesReceived] = '\0';
-        printf("%s\n", buffer);
-        if (strstr(buffer, "Error: Nombre de usuario ya en uso") != NULL) {
-            close(serverSocket);
-            exit(1);
+    if (send(sock, buffer, len, 0) < 0) {
+        perror("Send failed");
+    } else {
+        printf("Request sent successfully\n"); // Depuración
+    }
+}
+
+Chat__Response* receive_response(int sock) {
+    uint8_t buffer[BUFFER_SIZE];
+    int n = recv(sock, buffer, BUFFER_SIZE, 0);
+    if (n < 0) {
+        perror("Receive failed");
+        return NULL;
+    }
+    printf("Received response, length: %d\n", n); // Depuración
+    return chat__response__unpack(NULL, n, buffer);
+}
+
+void register_user(int sock, const char *username) {
+    Chat__NewUserRequest new_user_req = CHAT__NEW_USER_REQUEST__INIT;
+    new_user_req.username = (char *)username;
+
+    Chat__Request request = CHAT__REQUEST__INIT;
+    request.operation = CHAT__OPERATION__REGISTER_USER;
+    request.payload_case = CHAT__REQUEST__PAYLOAD_REGISTER_USER;
+    request.register_user = &new_user_req;
+
+    printf("Registering user: %s\n", username); // Depuración
+    send_request(sock, &request);
+
+    Chat__Response *response = receive_response(sock);
+    if (response) {
+        printf("Server response: %s\n", response->message);
+        chat__response__free_unpacked(response, NULL);
+    }
+}
+
+void send_message(int sock, const char *recipient, const char *content) {
+    Chat__SendMessageRequest send_msg_req = CHAT__SEND_MESSAGE_REQUEST__INIT;
+    send_msg_req.recipient = (char *)recipient;
+    send_msg_req.content = (char *)content;
+
+    Chat__Request request = CHAT__REQUEST__INIT;
+    request.operation = CHAT__OPERATION__SEND_MESSAGE;
+    request.payload_case = CHAT__REQUEST__PAYLOAD_SEND_MESSAGE;
+    request.send_message = &send_msg_req;
+
+    printf("Sending message to: %s, content: %s\n", recipient, content); // Depuración
+    send_request(sock, &request);
+
+    Chat__Response *response = receive_response(sock);
+    if (response) {
+        printf("Server response: %s\n", response->message);
+        chat__response__free_unpacked(response, NULL);
+    }
+}
+
+void list_connected_users(int sock) {
+    Chat__UserListRequest user_list_req = CHAT__USER_LIST_REQUEST__INIT;
+
+    Chat__Request request = CHAT__REQUEST__INIT;
+    request.operation = CHAT__OPERATION__GET_USERS;
+    request.payload_case = CHAT__REQUEST__PAYLOAD_GET_USERS;
+    request.get_users = &user_list_req;
+
+    printf("Requesting list of connected users\n"); // Depuración
+    send_request(sock, &request);
+
+    // Espera un tiempo limitado para recibir la respuesta del servidor
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(sock, &readfds);
+    struct timeval timeout;
+    timeout.tv_sec = 5; // Espera 5 segundos
+    timeout.tv_usec = 0;
+
+    int activity = select(sock + 1, &readfds, NULL, NULL, &timeout);
+    if (activity == -1) {
+        perror("Select error");
+    } else if (activity == 0) {
+        printf("No response from server.\n");
+    } else {
+        Chat__Response *response = receive_response(sock);
+        if (response && response->result_case == CHAT__RESPONSE__RESULT_USER_LIST) {
+            printf("Connected users:\n"); // Depuración
+            for (size_t i = 0; i < response->user_list->n_users; ++i) {
+                printf("User: %s, Status: %d\n", response->user_list->users[i]->username, response->user_list->users[i]->status);
+            }
+            chat__response__free_unpacked(response, NULL);
+        } else {
+            printf("Failed to get user list or incorrect response format\n"); // Depuración
         }
     }
-
-    return NULL;
-}
-
-void sendMessage(const char* message) {
-    send(serverSocket, message, strlen(message), 0);
-}
-
-void handleExit() {
-    sendMessage(username); // Enviar el nombre de usuario para desconectar
-    close(serverSocket);
-    printf("Desconectado del servidor\n");
-    exit(0);
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 4) {
-        fprintf(stderr, "Uso: %s <nombredeusuario> <IPdelservidor> <puertodelservidor>\n", argv[0]);
-        exit(EXIT_FAILURE);
+    if (argc < 4) {
+        fprintf(stderr, "Usage: %s <username> <server_ip> <server_port>\n", argv[0]);
+        return 1;
     }
 
-    strcpy(username, argv[1]);
-    char* serverIp = argv[2];
-    int serverPort = atoi(argv[3]);
+    const char *username = argv[1];
+    const char *server_ip = argv[2];
+    int server_port = atoi(argv[3]);
 
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket < 0) {
-        perror("Error al crear el socket");
-        exit(EXIT_FAILURE);
+    int sock;
+    struct sockaddr_in server_addr;
+
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation error");
+        return 1;
     }
 
-    struct sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(serverPort);
-
-    if (inet_pton(AF_INET, serverIp, &serverAddr.sin_addr) <= 0) {
-        perror("Dirección del servidor inválida");
-        exit(EXIT_FAILURE);
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(server_port);
+    if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
+        perror("Invalid address / Address not supported");
+        return 1;
     }
 
-    if (connect(serverSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
-        perror("Error al conectar con el servidor");
-        exit(EXIT_FAILURE);
+    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection failed");
+        return 1;
     }
 
-    sendMessage(username); // Enviar el nombre de usuario para registrar
+    printf("Connected to server %s:%d\n", server_ip, server_port); // Depuración
 
-    pthread_t receiveThread;
-    pthread_create(&receiveThread, NULL, receiveMessages, NULL);
-    pthread_detach(receiveThread);
+    register_user(sock, username);
 
-    char message[MAX_MESSAGE_SIZE];
-
+    char command[BUFFER_SIZE];
     while (1) {
-        fgets(message, sizeof(message), stdin);
-        message[strcspn(message, "\n")] = '\0'; // Eliminar el salto de línea
+        printf("Enter command (send/list/exit): ");
+        fgets(command, BUFFER_SIZE, stdin);
+        command[strcspn(command, "\n")] = 0;
 
-        if (strcmp(message, "/exit") == 0) {
-            handleExit();
-        } else if (strcmp(message, "/list") == 0) {
-            sendMessage("/list");
+        if (strcmp(command, "send") == 0) {
+            char recipient[BUFFER_SIZE];
+            char message[BUFFER_SIZE];
+            printf("Enter recipient: ");
+            fgets(recipient, BUFFER_SIZE, stdin);
+            recipient[strcspn(recipient, "\n")] = 0;
+            printf("Enter message: ");
+            fgets(message, BUFFER_SIZE, stdin);
+            message[strcspn(message, "\n")] = 0;
+            send_message(sock, recipient, message);
+        } else if (strcmp(command, "list") == 0) {
+            list_connected_users(sock);
+        } else if (strcmp(command, "exit") == 0) {
+            break;
         } else {
-            sendMessage(message);
+            printf("Unknown command.\n");
         }
     }
 
+    close(sock);
     return 0;
 }

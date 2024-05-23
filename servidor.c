@@ -1,192 +1,269 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 #include <pthread.h>
+#include <protobuf-c/protobuf-c.h>
+#include "chat.pb-c.h"
 
-#define DEFAULT_IP "127.0.0.1"
-#define MAX_PENDING_CONNECTIONS 5
-#define MAX_CLIENT_MESSAGE_SIZE 1024
-#define MAX_USERS 100
+#define MAX_CLIENTS 100
+#define BUFFER_SIZE 1024
 
 typedef struct {
+    int socket;
     char username[50];
-    char ip[INET_ADDRSTRLEN];
-} User;
+} client_t;
 
-User users[MAX_USERS];
-int userCount = 0;
-pthread_mutex_t userLock = PTHREAD_MUTEX_INITIALIZER;
+client_t *clients[MAX_CLIENTS];
+pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void sendMessage(int socket, const char* message) {
-    send(socket, message, strlen(message), 0);
-}
-
-void removeUser(const char* username) {
-    pthread_mutex_lock(&userLock);
-    for (int i = 0; i < userCount; ++i) {
-        if (strcmp(users[i].username, username) == 0) {
-            users[i] = users[userCount - 1];
-            userCount--;
+void add_client(client_t *client) {
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (!clients[i]) {
+            clients[i] = client;
             break;
         }
     }
-    pthread_mutex_unlock(&userLock);
+    pthread_mutex_unlock(&clients_mutex);
 }
 
-void getUserList(int clientSocket) {
-    pthread_mutex_lock(&userLock);
-    char userList[MAX_CLIENT_MESSAGE_SIZE] = "Usuarios conectados:\n";
-    for (int i = 0; i < userCount; ++i) {
-        strcat(userList, users[i].username);
-        strcat(userList, "\n");
-    }
-    pthread_mutex_unlock(&userLock);
-    sendMessage(clientSocket, userList);
-}
-
-void* handleClient(void* arg) {
-    int clientSocket = *(int*)arg;
-    free(arg);
-
-    char buffer[MAX_CLIENT_MESSAGE_SIZE];
-    ssize_t bytesReceived;
-
-    // Leer el nombre de usuario del cliente
-    bytesReceived = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
-    if (bytesReceived < 0) {
-        perror("Error al recibir datos del cliente");
-        close(clientSocket);
-        return NULL;
-    }
-    buffer[bytesReceived] = '\0';
-
-    char username[50];
-    strncpy(username, buffer, sizeof(username));
-    username[sizeof(username) - 1] = '\0';
-
-    char clientIp[INET_ADDRSTRLEN];
-    struct sockaddr_in addr;
-    socklen_t addr_size = sizeof(struct sockaddr_in);
-    getpeername(clientSocket, (struct sockaddr*)&addr, &addr_size);
-    inet_ntop(AF_INET, &addr.sin_addr, clientIp, INET_ADDRSTRLEN);
-
-    // Verificar si el usuario ya está registrado
-    pthread_mutex_lock(&userLock);
-    for (int i = 0; i < userCount; ++i) {
-        if (strcmp(users[i].username, username) == 0) {
-            sendMessage(clientSocket, "Error: Nombre de usuario ya en uso");
-            pthread_mutex_unlock(&userLock);
-            close(clientSocket);
-            return NULL;
+void remove_client(client_t *client) {
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i] == client) {
+            clients[i] = NULL;
+            break;
         }
     }
-
-    // Registrar al nuevo usuario
-    strcpy(users[userCount].username, username);
-    strcpy(users[userCount].ip, clientIp);
-    userCount++;
-    pthread_mutex_unlock(&userLock);
-
-    sendMessage(clientSocket, "Registro exitoso");
-
-    printf("Usuario registrado: %s desde %s\n", username, clientIp);
-
-    // Leer más mensajes del cliente
-    while ((bytesReceived = recv(clientSocket, buffer, sizeof(buffer) - 1, 0)) > 0) {
-        buffer[bytesReceived] = '\0';
-
-        // Verificar si el cliente solicita el listado de usuarios
-        if (strcmp(buffer, "/list") == 0) {
-            getUserList(clientSocket);
-        } else {
-            printf("Mensaje recibido de %s: %s\n", username, buffer);
-        }
-    }
-
-    // Eliminar usuario de la lista al desconectarse
-    removeUser(username);
-
-    printf("Usuario desconectado: %s\n", username);
-
-    close(clientSocket);
-    return NULL;
+    pthread_mutex_unlock(&clients_mutex);
 }
 
-int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Uso: %s <puerto>\n", argv[0]);
-        exit(EXIT_FAILURE);
+void list_connected_users(int client_socket) {
+    printf("Sending user list to client...\n"); // Mensaje de depuración
+
+    Chat__UserListResponse user_list = CHAT__USER_LIST_RESPONSE__INIT;
+    user_list.n_users = 0;
+    user_list.users = malloc(MAX_CLIENTS * sizeof(Chat__User*));
+
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i]) {
+            Chat__User *user = malloc(sizeof(Chat__User));
+            chat__user__init(user);
+            user->username = clients[i]->username;
+            user->status = CHAT__USER_STATUS__ONLINE;
+            user_list.users[user_list.n_users++] = user;
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
+
+    Chat__Response response = CHAT__RESPONSE__INIT;
+    response.operation = CHAT__OPERATION__GET_USERS;
+    response.result_case = CHAT__RESPONSE__RESULT_USER_LIST;
+    response.user_list = &user_list;
+
+    uint8_t buffer[BUFFER_SIZE];
+    unsigned len = chat__response__pack(&response, buffer);
+    printf("Packed user list, length: %u\n", len);
+    if (send(client_socket, buffer, len, 0) < 0) {
+        perror("Send failed");
+    } else {
+        printf("User list sent successfully\n");
     }
 
-    int port = atoi(argv[1]);
-    if (port <= 0) {
-        fprintf(stderr, "Puerto inválido\n");
-        exit(EXIT_FAILURE);
+    for (int i = 0; i < user_list.n_users; i++) {
+        free(user_list.users[i]);
     }
+    free(user_list.users);
+}
 
-    int serverSocket, clientSocket;
-    struct sockaddr_in serverAddr, clientAddr;
-    socklen_t clientAddrSize = sizeof(clientAddr);
+void *handle_client(void *arg) {
+    client_t *cli = (client_t *)arg;
+    uint8_t buffer[BUFFER_SIZE];
+    int n;
 
-    // Crear socket
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket < 0) {
-        perror("Error al crear el socket del servidor");
-        exit(EXIT_FAILURE);
-    }
+    while ((n = recv(cli->socket, buffer, BUFFER_SIZE, 0)) > 0) {
+        printf("Received message from client %s: %.*s\n", cli->username, n, buffer); // Depuración
 
-    // Configurar dirección del servidor
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(port);
-    if (inet_pton(AF_INET, DEFAULT_IP, &serverAddr.sin_addr) <= 0) {
-        perror("Dirección del servidor inválida");
-        exit(EXIT_FAILURE);
-    }
-
-    // Enlazar socket a la dirección del servidor
-    if (bind(serverSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
-        perror("Error al enlazar el socket del servidor");
-        exit(EXIT_FAILURE);
-    }
-
-    // Escuchar por conexiones entrantes
-    if (listen(serverSocket, MAX_PENDING_CONNECTIONS) < 0) {
-        perror("Error al escuchar por conexiones entrantes");
-        exit(EXIT_FAILURE);
-    }
-
-    printf("Servidor iniciado en %s:%d. Esperando por conexiones...\n", DEFAULT_IP, port);
-
-    // Aceptar conexiones entrantes
-    while (1) {
-        clientSocket = accept(serverSocket, (struct sockaddr *)&clientAddr, &clientAddrSize);
-        if (clientSocket < 0) {
-            perror("Error al aceptar la conexión entrante");
+        Chat__Request *request = chat__request__unpack(NULL, n, buffer);
+        if (!request) {
+            printf("Failed to unpack request from client %s\n", cli->username); // Depuración
             continue;
         }
 
-        printf("Intento de conexión\n");
+        printf("Request unpacked, operation: %d\n", request->operation); // Depuración
 
-        // Crear un hilo para manejar la conexión con el cliente
-        pthread_t thread;
-        int* clientSocketPtr = malloc(sizeof(int));
-        *clientSocketPtr = clientSocket;
-        if (pthread_create(&thread, NULL, handleClient, clientSocketPtr) != 0) {
-            perror("Error al crear el hilo");
-            close(clientSocket);
-            free(clientSocketPtr);
-        } else {
-            pthread_detach(thread); // Desvincular el hilo para que se limpie solo al finalizar
+        switch (request->operation) {
+            case CHAT__OPERATION__REGISTER_USER:
+                // Este caso ya está manejado en la función main.
+                break;
+            case CHAT__OPERATION__GET_USERS:
+                printf("Handling GET_USERS request\n"); // Depuración
+                list_connected_users(cli->socket);
+                break;
+            case CHAT__OPERATION__SEND_MESSAGE:
+                // Manejar solicitud de enviar un mensaje
+                // ...
+                break;
+            case CHAT__OPERATION__UPDATE_STATUS:
+                // Manejar solicitud de actualizar estado de usuario
+                // ...
+                break;
+            case CHAT__OPERATION__UNREGISTER_USER:
+                // Manejar solicitud de desconectar usuario
+                // ...
+                break;
+            default:
+                printf("Unknown operation: %d\n", request->operation); // Depuración
+                // Operación no válida, enviar respuesta de error al cliente
+                break;
         }
+
+        chat__request__free_unpacked(request, NULL);
     }
 
-    // Cerrar el socket del servidor
-    close(serverSocket);
+    close(cli->socket);
+    remove_client(cli);
+    free(cli);
+    return NULL;
+}
 
+int username_exists(const char *username) {
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i] && strcmp(clients[i]->username, username) == 0) {
+            pthread_mutex_unlock(&clients_mutex);
+            return 1;
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
+    return 0;
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+        return 1;
+    }
+
+    int server_port = atoi(argv[1]);
+    int server_socket, client_socket;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_len;
+    pthread_t tid;
+
+    // Create socket
+    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    // Configure server address
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(server_port);
+
+    // Bind socket
+    if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        return 1;
+    }
+
+    // Listen on the socket
+    if (listen(server_socket, 5) < 0) {
+        perror("Listen failed");
+        return 1;
+    }
+
+    printf("Server listening on port %d\n", server_port);
+
+    while (1) {
+        client_len = sizeof(client_addr);
+        if ((client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_len)) < 0) {
+            perror("Accept failed");
+            continue;
+        }
+
+        printf("New client connected\n"); // Mensaje de depuración
+
+        uint8_t buffer[BUFFER_SIZE];
+        int n = recv(client_socket, buffer, BUFFER_SIZE, 0);
+        if (n <= 0) {
+            perror("Initial receive failed"); // Depuración
+            close(client_socket);
+            continue;
+        }
+
+        printf("Received initial request from client, length: %d\n", n); // Depuración
+
+        Chat__Request *request = chat__request__unpack(NULL, n, buffer);
+        if (!request) {
+            printf("Failed to unpack initial request\n"); // Depuración
+            close(client_socket);
+            continue;
+        }
+
+        switch (request->operation) {
+            case CHAT__OPERATION__REGISTER_USER:
+                {
+                    const char *username = request->register_user->username;
+                    printf("Registering user: %s\n", username); // Depuración
+                    if (username_exists(username)) {
+                        Chat__Response response = CHAT__RESPONSE__INIT;
+                        response.operation = CHAT__OPERATION__REGISTER_USER;
+                        response.status_code = CHAT__STATUS_CODE__BAD_REQUEST;
+                        response.message = "Username already exists";
+                        unsigned len = chat__response__pack(&response, buffer);
+                        send(client_socket, buffer, len, 0);
+                        close(client_socket);
+                    } else {
+                        client_t *cli = (client_t *)malloc(sizeof(client_t));
+                        cli->socket = client_socket;
+                        strncpy(cli->username, username, sizeof(cli->username));
+                        add_client(cli);
+
+                        Chat__Response response = CHAT__RESPONSE__INIT;
+                        response.operation = CHAT__OPERATION__REGISTER_USER;
+                        response.status_code = CHAT__STATUS_CODE__OK;
+                        response.message = "User registered successfully";
+                        unsigned len = chat__response__pack(&response, buffer);
+                        send(client_socket, buffer, len, 0);
+
+                        if (pthread_create(&tid, NULL, &handle_client, (void*)cli) != 0) {
+                            perror("Thread creation failed");
+                            free(cli);
+                        }
+                        pthread_detach(tid);
+                    }
+                }
+                break;
+            case CHAT__OPERATION__GET_USERS:
+                printf("Handling GET_USERS request\n"); // Depuración
+                list_connected_users(client_socket);
+                break;
+            case CHAT__OPERATION__SEND_MESSAGE:
+                // Manejar solicitud de enviar un mensaje
+                // ...
+                break;
+            case CHAT__OPERATION__UPDATE_STATUS:
+                // Manejar solicitud de actualizar estado de usuario
+                // ...
+                break;
+            case CHAT__OPERATION__UNREGISTER_USER:
+                // Manejar solicitud de desconectar usuario
+                // ...
+                break;
+            default:
+                printf("Unknown initial operation: %d\n", request->operation); // Depuración
+                // Operación no válida, enviar respuesta de error al cliente
+                break;
+        }
+
+        chat__request__free_unpacked(request, NULL);
+    }
+
+    close(server_socket);
     return 0;
 }
