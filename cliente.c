@@ -32,6 +32,26 @@ Chat__Response* receive_response(int sock) {
     return chat__response__unpack(NULL, n, buffer);
 }
 
+void update_user_status(int sock, const char *username, Chat__UserStatus new_status) {
+    Chat__UpdateStatusRequest update_status_req = CHAT__UPDATE_STATUS_REQUEST__INIT;
+    update_status_req.username = (char *)username;
+    update_status_req.new_status = new_status;
+
+    Chat__Request request = CHAT__REQUEST__INIT;
+    request.operation = CHAT__OPERATION__UPDATE_STATUS;
+    request.payload_case = CHAT__REQUEST__PAYLOAD_UPDATE_STATUS;
+    request.update_status = &update_status_req;
+
+    printf("Updating status for user: %s\n", username); // Depuración
+    send_request(sock, &request);
+
+    Chat__Response *response = receive_response(sock);
+    if (response) {
+        printf("Server response: %s\n", response->message);
+        chat__response__free_unpacked(response, NULL);
+    }
+}
+
 void register_user(int sock, const char *username) {
     Chat__NewUserRequest new_user_req = CHAT__NEW_USER_REQUEST__INIT;
     new_user_req.username = (char *)username;
@@ -145,7 +165,7 @@ int main(int argc, char *argv[]) {
 
     char command[BUFFER_SIZE];
     while (1) {
-        printf("Enter command (send/list/exit): ");
+        printf("Enter command (send/list/status/exit): ");
         fgets(command, BUFFER_SIZE, stdin);
         command[strcspn(command, "\n")] = 0;
 
@@ -161,6 +181,16 @@ int main(int argc, char *argv[]) {
             send_message(sock, recipient, message);
         } else if (strcmp(command, "list") == 0) {
             list_connected_users(sock);
+        } else if (strcmp(command, "status") == 0) {
+            int new_status;
+            printf("Enter new status (0 for online, 1 for busy, 2 for offline): ");
+            scanf("%d", &new_status);
+            getchar(); // Consume el carácter de nueva línea residual
+            if (new_status >= 0 && new_status <= 2) {
+                update_user_status(sock, username, new_status);
+            } else {
+                printf("Invalid status.\n");
+            }
         } else if (strcmp(command, "exit") == 0) {
             break;
         } else {

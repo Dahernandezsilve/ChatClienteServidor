@@ -13,6 +13,7 @@
 typedef struct {
     int socket;
     char username[50];
+    Chat__UserStatus status;
 } client_t;
 
 client_t *clients[MAX_CLIENTS];
@@ -40,6 +41,21 @@ void remove_client(client_t *client) {
     pthread_mutex_unlock(&clients_mutex);
 }
 
+void update_user_status(Chat__UpdateStatusRequest *update_request) {
+    const char *username = update_request->username;
+    Chat__UserStatus new_status = update_request->new_status;
+
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i] && strcmp(clients[i]->username, username) == 0) {
+            clients[i]->status = new_status;
+            printf("Updated status for user %s to %d\n", username, new_status);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
+}
+
 void list_connected_users(int client_socket) {
     printf("Sending user list to client...\n"); // Mensaje de depuración
 
@@ -53,7 +69,7 @@ void list_connected_users(int client_socket) {
             Chat__User *user = malloc(sizeof(Chat__User));
             chat__user__init(user);
             user->username = clients[i]->username;
-            user->status = CHAT__USER_STATUS__ONLINE;
+            user->status = clients[i]->status; // Utiliza el estado real del usuario
             user_list.users[user_list.n_users++] = user;
         }
     }
@@ -78,6 +94,8 @@ void list_connected_users(int client_socket) {
     }
     free(user_list.users);
 }
+
+
 
 void *handle_client(void *arg) {
     client_t *cli = (client_t *)arg;
@@ -108,7 +126,16 @@ void *handle_client(void *arg) {
                 // ...
                 break;
             case CHAT__OPERATION__UPDATE_STATUS:
-                // Manejar solicitud de actualizar estado de usuario
+                printf("Handling UPDATE_STATUS request\n"); // Depuración
+                update_user_status(request->update_status);
+                {
+                    Chat__Response response = CHAT__RESPONSE__INIT;
+                    response.operation = CHAT__OPERATION__UPDATE_STATUS;
+                    response.status_code = CHAT__STATUS_CODE__OK;
+                    response.message = "User status updated successfully";
+                    unsigned len = chat__response__pack(&response, buffer);
+                    send(cli->socket, buffer, len, 0);
+                }
                 // ...
                 break;
             case CHAT__OPERATION__UNREGISTER_USER:
