@@ -95,6 +95,40 @@ void list_connected_users(int client_socket) {
     free(user_list.users);
 }
 
+void send_private_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i] && strcmp(clients[i]->username, msg_req->recipient) == 0) {
+            // Crear un mensaje de respuesta
+            Chat__Response response = CHAT__RESPONSE__INIT;
+            response.operation = CHAT__OPERATION__SEND_MESSAGE;
+            response.status_code = CHAT__STATUS_CODE__OK;
+            response.result_case = CHAT__RESPONSE__RESULT_INCOMING_MESSAGE;
+            
+            // Crear y llenar el mensaje de respuesta
+            Chat__IncomingMessageResponse *incoming_msg = malloc(sizeof(Chat__IncomingMessageResponse));
+            chat__incoming_message_response__init(incoming_msg);
+            incoming_msg->sender = strdup(sender->username); // Establecer el remitente
+            incoming_msg->content = strdup(msg_req->content);
+            incoming_msg->type = CHAT__MESSAGE_TYPE__DIRECT; // Indicar que es un mensaje directo
+            
+            // Establecer el mensaje de respuesta en el campo correspondiente
+            response.incoming_message = incoming_msg;
+
+            // Empaquetar y enviar el mensaje de respuesta
+            uint8_t buffer[BUFFER_SIZE];
+            unsigned len = chat__response__pack(&response, buffer);
+            if (send(clients[i]->socket, buffer, len, 0) < 0) {
+                perror("Send failed");
+            } else {
+                printf("Message sent to %s from %s\n", msg_req->recipient, sender->username);
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
+}
+
 
 
 void *handle_client(void *arg) {
@@ -123,11 +157,7 @@ void *handle_client(void *arg) {
                 break;
             case CHAT__OPERATION__SEND_MESSAGE:
                 printf("Handling SEND_MESSAGE request\n");
-                if (strstr(request->send_message->recipient, "@")) {
-                    send_private_message(cli, request->send_message);
-                } else {
-                    // Manejar mensajes generales aquí
-                }
+                send_private_message(cli, request->send_message);
                 break;
             case CHAT__OPERATION__UPDATE_STATUS:
                 printf("Handling UPDATE_STATUS request\n"); // Depuración
@@ -173,31 +203,7 @@ int username_exists(const char *username) {
     return 0;
 }
 
-void send_private_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
-    pthread_mutex_lock(&clients_mutex);
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i] && strcmp(clients[i]->username, msg_req->recipient) == 0) {
-            Chat__SendMessageRequest msg = CHAT__SEND_MESSAGE_REQUEST__INIT;
-            msg.recipient = sender->username;
-            msg.content = msg_req->content;
 
-            Chat__Response response = CHAT__RESPONSE__INIT;
-            response.operation = CHAT__OPERATION__SEND_MESSAGE;
-            response.result_case = CHAT__REQUEST__PAYLOAD_SEND_MESSAGE;
-            response.message = &msg;
-
-            uint8_t buffer[BUFFER_SIZE];
-            unsigned len = chat__response__pack(&response, buffer);
-            if (send(clients[i]->socket, buffer, len, 0) < 0) {
-                perror("Send failed");
-            } else {
-                printf("Message sent to %s from %s\n", msg_req->recipient, sender->username);
-            }
-            break;
-        }
-    }
-    pthread_mutex_unlock(&clients_mutex);
-}
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -301,8 +307,15 @@ int main(int argc, char *argv[]) {
                 list_connected_users(client_socket);
                 break;
             case CHAT__OPERATION__SEND_MESSAGE:
-                printf("Handling SEND_MESSAGE request\n");
-                send_private_message(NULL, request->send_message);
+                {
+                    const char *recipient = request->send_message->recipient;
+                    for (int i = 0; i < MAX_CLIENTS; i++) {
+                        if (clients[i] && strcmp(clients[i]->username, recipient) == 0) {
+                            send_private_message(clients[i], request->send_message);
+                            break;
+                        }
+                    }
+                }
                 break;
             case CHAT__OPERATION__UPDATE_STATUS:
                 // Manejar solicitud de actualizar estado de usuario

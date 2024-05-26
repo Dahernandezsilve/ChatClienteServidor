@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <arpa/inet.h>
 #include <protobuf-c/protobuf-c.h>
 #include "chat.pb-c.h"
@@ -84,12 +85,8 @@ void send_message(int sock, const char *recipient, const char *content) {
     printf("Sending message to: %s, content: %s\n", recipient, content); // Depuración
     send_request(sock, &request);
 
-    Chat__Response *response = receive_response(sock);
-    if (response) {
-        printf("Server response: %s\n", response->message);
-        chat__response__free_unpacked(response, NULL);
-    }
 }
+
 
 void list_connected_users(int sock) {
     Chat__UserListRequest user_list_req = CHAT__USER_LIST_REQUEST__INIT;
@@ -129,6 +126,103 @@ void list_connected_users(int sock) {
     }
 }
 
+void *message_receiver(void *arg) {
+    int sock = *((int *)arg);
+    while (1) { // Hilo sigue en ejecución indefinidamente
+        struct timeval tv;
+        tv.tv_sec = 1; // Espera 1 segundo
+        tv.tv_usec = 0;
+
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(sock, &readfds);
+
+        int activity = select(sock + 1, &readfds, NULL, NULL, &tv);
+        if (activity < 0) {
+            perror("Select error");
+            break;
+        } else if (activity == 0) {
+            continue; // No hay actividad, intenta de nuevo
+        } else {
+            Chat__Response *response = receive_response(sock);
+            if (response) {
+                switch (response->result_case) {
+                    case CHAT__RESPONSE__RESULT_INCOMING_MESSAGE:
+                        printf("Message received from %s: %s\n", response->incoming_message->sender, response->incoming_message->content);
+                        break;
+                    default:
+                        printf("Unknown response received. Response type: %d\n", response->result_case);
+                        // Imprimir el contenido de la respuesta
+                        uint8_t *response_buffer = NULL;
+                        unsigned response_len = chat__response__get_packed_size(response);
+                        response_buffer = malloc(response_len);
+                        if (response_buffer != NULL) {
+                            chat__response__pack(response, response_buffer);
+                            printf("Response content (hex): ");
+                            for (unsigned i = 0; i < response_len; ++i) {
+                                printf("%02x ", response_buffer[i]);
+                            }
+                            printf("\n");
+                            free(response_buffer);
+                        }
+                        break;
+
+                }
+                chat__response__free_unpacked(response, NULL);
+            } else {
+                printf("Failed to receive response\n");
+                break;
+            }
+        }
+    }
+    return NULL;
+}
+
+void *user_input(void *arg) {
+    int sock = *((int *)arg);
+    char command[BUFFER_SIZE];
+    while (1) {
+        printf("Enter command (send/list/status/exit): ");
+        fgets(command, BUFFER_SIZE, stdin);
+        command[strcspn(command, "\n")] = 0;
+
+        printf("Command entered: %s\n", command); // Agregamos una impresión para verificar el comando ingresado
+
+        if (strcmp(command, "send") == 0) {
+            char recipient[BUFFER_SIZE];
+            char message[BUFFER_SIZE];
+            printf("Enter recipient: ");
+            fgets(recipient, BUFFER_SIZE, stdin);
+            recipient[strcspn(recipient, "\n")] = 0;
+            printf("Enter message: ");
+            fgets(message, BUFFER_SIZE, stdin);
+            message[strcspn(message, "\n")] = 0;
+            send_message(sock, recipient, message);
+        } else if (strcmp(command, "list") == 0) {
+            list_connected_users(sock);
+        } else if (strcmp(command, "status") == 0) {
+            int new_status;
+            printf("Enter new status (0 for online, 1 for busy, 2 for offline): ");
+            scanf("%d", &new_status);
+            getchar(); // Consumir el carácter de nueva línea residual en el búfer de entrada
+            if (new_status >= 0 && new_status <= 2) {
+                update_user_status(sock, (char *)arg, new_status);
+            } else {
+                printf("Invalid status.\n");
+            }
+        } else if (strcmp(command, "exit") == 0) {
+            break;
+        } else {
+            printf("Unknown command.\n");
+        }
+
+        // Limpiar el búfer de entrada para evitar problemas de lectura
+        fflush(stdin);
+    }
+    return NULL;
+}
+
+
 int main(int argc, char *argv[]) {
     if (argc < 4) {
         fprintf(stderr, "Usage: %s <username> <server_ip> <server_port>\n", argv[0]);
@@ -163,40 +257,15 @@ int main(int argc, char *argv[]) {
 
     register_user(sock, username);
 
-    char command[BUFFER_SIZE];
-    while (1) {
-        printf("Enter command (send/list/status/exit): ");
-        fgets(command, BUFFER_SIZE, stdin);
-        command[strcspn(command, "\n")] = 0;
-
-        if (strcmp(command, "send") == 0) {
-            char recipient[BUFFER_SIZE];
-            char message[BUFFER_SIZE];
-            printf("Enter recipient: ");
-            fgets(recipient, BUFFER_SIZE, stdin);
-            recipient[strcspn(recipient, "\n")] = 0;
-            printf("Enter message: ");
-            fgets(message, BUFFER_SIZE, stdin);
-            message[strcspn(message, "\n")] = 0;
-            send_message(sock, recipient, message);
-        } else if (strcmp(command, "list") == 0) {
-            list_connected_users(sock);
-        } else if (strcmp(command, "status") == 0) {
-            int new_status;
-            printf("Enter new status (0 for online, 1 for busy, 2 for offline): ");
-            scanf("%d", &new_status);
-            getchar(); // Consume el carácter de nueva línea residual
-            if (new_status >= 0 && new_status <= 2) {
-                update_user_status(sock, username, new_status);
-            } else {
-                printf("Invalid status.\n");
-            }
-        } else if (strcmp(command, "exit") == 0) {
-            break;
-        } else {
-            printf("Unknown command.\n");
-        }
+    pthread_t receiver_thread, input_thread;
+    if (pthread_create(&receiver_thread, NULL, message_receiver, (void *)&sock) != 0 ||
+        pthread_create(&input_thread, NULL, user_input, (void *)&sock) != 0) {
+        perror("Failed to create threads");
+        return 1;
     }
+
+    pthread_join(receiver_thread, NULL);  
+    pthread_join(input_thread, NULL);  
 
     close(sock);
     return 0;

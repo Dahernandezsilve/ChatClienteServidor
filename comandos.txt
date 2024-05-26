@@ -84,3 +84,68 @@ gcc -o cliente cliente.o chat.pb-c.o -lprotobuf-c
 /usr/bin/ld: cannot open output file cliente: Text file busy
 collect2: error: ld returned 1 exit status
 make: *** [Makefile:11: cliente] Error 1
+
+
+
+gcc -Wall -I/usr/include/protobuf-c -c cliente.c
+cliente.c: In function ‘message_receiver’:
+cliente.c:135:51: warning: implicit declaration of function ‘receive_message’; did you mean ‘receive_response’? [-Wimplicit-function-declaration]
+  135 |         Chat__IncomingMessageResponse *response = receive_message(sock);
+      |                                                   ^~~~~~~~~~~~~~~
+      |                                                   receive_response
+cliente.c:135:51: warning: initialization of ‘Chat__IncomingMessageResponse *’ {aka ‘struct _Chat__IncomingMessageResponse *’} from ‘int’ makes pointer from integer without a cast [-Wint-conversion]
+cliente.c: In function ‘main’:
+cliente.c:179:9: warning: implicit declaration of function ‘pthread_create’ [-Wimplicit-function-declaration]
+  179 |     if (pthread_create(&receiver_thread, NULL, message_receiver, (void *)&sock) != 0) {
+      |         ^~~~~~~~~~~~~~
+cliente.c:219:5: warning: implicit declaration of function ‘pthread_join’ [-Wimplicit-function-declaration]
+  219 |     pthread_join(receiver_thread, NULL);
+      |     ^~~~~~~~~~~~
+gcc -o cliente cliente.o chat.pb-c.o -lprotobuf-c
+/usr/bin/ld: cliente.o: in function `message_receiver':
+cliente.c:(.text+0x81f): undefined reference to `receive_message'
+collect2: error: ld returned 1 exit status
+make: *** [Makefile:11: cliente] Error 1
+
+
+
+gcc -Wall -I/usr/include/protobuf-c -c cliente.c
+cliente.c: In function ‘message_receiver’:
+cliente.c:148:36: warning: initialization of ‘Chat__Response *’ {aka ‘struct _Chat__Response *’} from incompatible pointer type ‘Chat__IncomingMessageResponse *’ {aka ‘struct _Chat__IncomingMessageResponse *’} [-Wincompatible-pointer-types]
+  148 |         Chat__Response *response = receive_message(sock);
+      |                                    ^~~~~~~~~~~~~~~
+cliente.c: In function ‘main’:
+cliente.c:197:9: warning: implicit declaration of function ‘pthread_create’ [-Wimplicit-function-declaration]
+  197 |     if (pthread_create(&receiver_thread, NULL, message_receiver, (void *)&sock) != 0) {
+      |         ^~~~~~~~~~~~~~
+cliente.c:237:5: warning: implicit declaration of function ‘pthread_join’ [-Wimplicit-function-declaration]
+  237 |     pthread_join(receiver_thread, NULL);
+      |     ^~~~~~~~~~~~
+gcc -o cliente cliente.o chat.pb-c.o -lprotobuf-c
+
+
+
+gcc -Wall -I/usr/include/protobuf-c -c cliente.c
+cliente.c: In function ‘receive_message’:
+cliente.c:140:12: warning: returning ‘Chat__IncomingMessageResponse *’ {aka ‘struct _Chat__IncomingMessageResponse *’} from a function with incompatible return type ‘Chat__Response *’ {aka ‘struct _Chat__Response *’} [-Wincompatible-pointer-types]
+  140 |     return chat__incoming_message_response__unpack(NULL, n, buffer);
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cliente.c: In function ‘main’:
+cliente.c:198:9: warning: implicit declaration of function ‘pthread_create’ [-Wimplicit-function-declaration]
+  198 |     if (pthread_create(&receiver_thread, NULL, message_receiver, (void *)&sock) != 0) {
+      |         ^~~~~~~~~~~~~~
+cliente.c:238:5: warning: implicit declaration of function ‘pthread_join’ [-Wimplicit-function-declaration]
+  238 |     pthread_join(receiver_thread, NULL);
+      |     ^~~~~~~~~~~~
+gcc -o cliente cliente.o chat.pb-c.o -lprotobuf-c
+
+
+
+gcc -Wall -I/usr/include/protobuf-c -c cliente.c
+cliente.c: In function ‘main’:
+cliente.c:196:9: warning: implicit declaration of function ‘pthread_create’ [-Wimplicit-function-declaration]
+  196 |     if (pthread_create(&receiver_thread, NULL, message_receiver, (void *)&sock) != 0) {
+      |         ^~~~~~~~~~~~~~
+cliente.c:236:5: warning: implicit declaration of function ‘pthread_join’ [-Wimplicit-function-declaration]
+  236 |     pthread_join(receiver_thread, NULL);
+      |     ^~~~~~~~~~~~
