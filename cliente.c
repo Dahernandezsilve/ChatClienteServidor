@@ -129,30 +129,6 @@ void list_connected_users(int sock) {
     }
 }
 
-void *receive_messages(void *sock_ptr) {
-    int sock = *(int *)sock_ptr;
-    while (1) {
-        Chat__Response *response = receive_response(sock);
-        if (response) {
-            switch (response->result_case) {
-                case CHAT__RESPONSE__RESULT_MESSAGE:
-                    printf("Message from %s: %s\n", response->message->sender, response->message->content);
-                    break;
-                case CHAT__RESPONSE__RESULT_USER_LIST:
-                    printf("Connected users:\n");
-                    for (size_t i = 0; i < response->user_list->n_users; ++i) {
-                        printf("User: %s, Status: %d\n", response->user_list->users[i]->username, response->user_list->users[i]->status);
-                    }
-                    break;
-                default:
-                    printf("Server response: %s\n", response->message);
-            }
-            chat__response__free_unpacked(response, NULL);
-        }
-    }
-    return NULL;
-}
-
 int main(int argc, char *argv[]) {
     if (argc < 4) {
         fprintf(stderr, "Usage: %s <username> <server_ip> <server_port>\n", argv[0]);
@@ -186,12 +162,6 @@ int main(int argc, char *argv[]) {
     printf("Connected to server %s:%d\n", server_ip, server_port); // Depuración
 
     register_user(sock, username);
-
-    pthread_t recv_thread;
-    if (pthread_create(&recv_thread, NULL, receive_messages, (void *)&sock) != 0) {
-        perror("Thread creation failed");
-        return 1;
-    }
 
     char command[BUFFER_SIZE];
     while (1) {

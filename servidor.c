@@ -123,7 +123,11 @@ void *handle_client(void *arg) {
                 break;
             case CHAT__OPERATION__SEND_MESSAGE:
                 printf("Handling SEND_MESSAGE request\n");
-                send_private_message(cli, request->send_message);
+                if (strstr(request->send_message->recipient, "@")) {
+                    send_private_message(cli, request->send_message);
+                } else {
+                    // Manejar mensajes generales aquí
+                }
                 break;
             case CHAT__OPERATION__UPDATE_STATUS:
                 printf("Handling UPDATE_STATUS request\n"); // Depuración
@@ -173,13 +177,13 @@ void send_private_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
     pthread_mutex_lock(&clients_mutex);
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i] && strcmp(clients[i]->username, msg_req->recipient) == 0) {
-            Chat__Message msg = CHAT__MESSAGE__INIT;
-            msg.sender = sender->username;
+            Chat__SendMessageRequest msg = CHAT__SEND_MESSAGE_REQUEST__INIT;
+            msg.recipient = sender->username;
             msg.content = msg_req->content;
 
             Chat__Response response = CHAT__RESPONSE__INIT;
             response.operation = CHAT__OPERATION__SEND_MESSAGE;
-            response.result_case = CHAT__RESPONSE__RESULT_MESSAGE;
+            response.result_case = CHAT__REQUEST__PAYLOAD_SEND_MESSAGE;
             response.message = &msg;
 
             uint8_t buffer[BUFFER_SIZE];
