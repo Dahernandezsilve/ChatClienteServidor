@@ -122,8 +122,8 @@ void *handle_client(void *arg) {
                 list_connected_users(cli->socket);
                 break;
             case CHAT__OPERATION__SEND_MESSAGE:
-                // Manejar solicitud de enviar un mensaje
-                // ...
+                printf("Handling SEND_MESSAGE request\n");
+                send_private_message(cli, request->send_message);
                 break;
             case CHAT__OPERATION__UPDATE_STATUS:
                 printf("Handling UPDATE_STATUS request\n"); // Depuración
@@ -167,6 +167,32 @@ int username_exists(const char *username) {
     }
     pthread_mutex_unlock(&clients_mutex);
     return 0;
+}
+
+void send_private_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i] && strcmp(clients[i]->username, msg_req->recipient) == 0) {
+            Chat__Message msg = CHAT__MESSAGE__INIT;
+            msg.sender = sender->username;
+            msg.content = msg_req->content;
+
+            Chat__Response response = CHAT__RESPONSE__INIT;
+            response.operation = CHAT__OPERATION__SEND_MESSAGE;
+            response.result_case = CHAT__RESPONSE__RESULT_MESSAGE;
+            response.message = &msg;
+
+            uint8_t buffer[BUFFER_SIZE];
+            unsigned len = chat__response__pack(&response, buffer);
+            if (send(clients[i]->socket, buffer, len, 0) < 0) {
+                perror("Send failed");
+            } else {
+                printf("Message sent to %s from %s\n", msg_req->recipient, sender->username);
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
 }
 
 int main(int argc, char *argv[]) {
@@ -271,8 +297,8 @@ int main(int argc, char *argv[]) {
                 list_connected_users(client_socket);
                 break;
             case CHAT__OPERATION__SEND_MESSAGE:
-                // Manejar solicitud de enviar un mensaje
-                // ...
+                printf("Handling SEND_MESSAGE request\n");
+                send_private_message(NULL, request->send_message);
                 break;
             case CHAT__OPERATION__UPDATE_STATUS:
                 // Manejar solicitud de actualizar estado de usuario
