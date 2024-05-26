@@ -129,8 +129,6 @@ void send_private_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
     pthread_mutex_unlock(&clients_mutex);
 }
 
-
-
 void *handle_client(void *arg) {
     client_t *cli = (client_t *)arg;
     uint8_t buffer[BUFFER_SIZE];

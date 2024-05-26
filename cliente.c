@@ -182,7 +182,7 @@ void *user_input(void *arg) {
     int sock = *((int *)arg);
     char command[BUFFER_SIZE];
     while (1) {
-        printf("Enter command (send/list/status/exit): ");
+        printf("Enter command (send/list/info/status/help/exit): ");
         fgets(command, BUFFER_SIZE, stdin);
         command[strcspn(command, "\n")] = 0;
 
@@ -200,6 +200,8 @@ void *user_input(void *arg) {
             send_message(sock, recipient, message);
         } else if (strcmp(command, "list") == 0) {
             list_connected_users(sock);
+        } else if (strcmp(command, "info") == 0) {
+            printf("Under construction.\n");
         } else if (strcmp(command, "status") == 0) {
             int new_status;
             printf("Enter new status (0 for online, 1 for busy, 2 for offline): ");
@@ -210,6 +212,9 @@ void *user_input(void *arg) {
             } else {
                 printf("Invalid status.\n");
             }
+        } else if (strcmp(command, "help") == 0) {
+            printf("Help incoming!\n");
+            printf("Available commands:\nsend - Send public or private messages.\nlist - The list of users using the chat.\nstatus - Change your current status.\ninfo - Look for some user's info.\nexit - Unregister/Log out.\n");
         } else if (strcmp(command, "exit") == 0) {
             break;
         } else {
