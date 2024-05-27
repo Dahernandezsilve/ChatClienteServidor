@@ -141,41 +141,42 @@ void *message_receiver(void *arg) {
         FD_SET(sock, &readfds);
 
         int activity = select(sock + 1, &readfds, NULL, NULL, &tv);
-        if (exit_requested) break; // Sal del bucle si se ha solicitado la salida
-        if (activity < 0) {
-            perror("Select error");
-            break;
-        } else if (activity == 0) {
-            continue; // No hay actividad, intenta de nuevo
-        } else {
-            Chat__Response *response = receive_response(sock);
-            if (response) {
-                switch (response->result_case) {
-                    case CHAT__RESPONSE__RESULT_INCOMING_MESSAGE:
-                        printf("Message received from %s: %s\n", response->incoming_message->sender, response->incoming_message->content);
-                        break;
-                    default:
-                        printf("Unknown response received. Response type: %d\n", response->result_case);
-                        // Imprimir el contenido de la respuesta
-                        uint8_t *response_buffer = NULL;
-                        unsigned response_len = chat__response__get_packed_size(response);
-                        response_buffer = malloc(response_len);
-                        if (response_buffer != NULL) {
-                            chat__response__pack(response, response_buffer);
-                            printf("Response content (hex): ");
-                            for (unsigned i = 0; i < response_len; ++i) {
-                                printf("%02x ", response_buffer[i]);
-                            }
-                            printf("\n");
-                            free(response_buffer);
-                        }
-                        break;
-
-                }
-                chat__response__free_unpacked(response, NULL);
-            } else {
-                printf("Failed to receive response\n");
+        while (!exit_requested) {
+            if (activity < 0) {
+                perror("Select error");
                 break;
+            } else if (activity == 0) {
+                continue; // No hay actividad, intenta de nuevo
+            } else {
+                Chat__Response *response = receive_response(sock);
+                if (response) {
+                    switch (response->result_case) {
+                        case CHAT__RESPONSE__RESULT_INCOMING_MESSAGE:
+                            printf("Message received from %s: %s\n", response->incoming_message->sender, response->incoming_message->content);
+                            break;
+                        default:
+                            printf("Unknown response received. Response type: %d\n", response->result_case);
+                            // Imprimir el contenido de la respuesta
+                            uint8_t *response_buffer = NULL;
+                            unsigned response_len = chat__response__get_packed_size(response);
+                            response_buffer = malloc(response_len);
+                            if (response_buffer != NULL) {
+                                chat__response__pack(response, response_buffer);
+                                printf("Response content (hex): ");
+                                for (unsigned i = 0; i < response_len; ++i) {
+                                    printf("%02x ", response_buffer[i]);
+                                }
+                                printf("\n");
+                                free(response_buffer);
+                            }
+                            break;
+
+                    }
+                    chat__response__free_unpacked(response, NULL);
+                } else {
+                    printf("Failed to receive response\n");
+                    break;
+                }
             }
         }
     }
@@ -199,6 +200,10 @@ void unregister_user(int sock, const char *username_to_unregister) {
         printf("Server response: %s\n", response->message);
         chat__response__free_unpacked(response, NULL);
     }
+
+    close(sock);
+    exit_requested = 1; // Establecer la variable de salida
+    exit(0);
 }
 
 void *user_input(void *arg) {
@@ -231,7 +236,7 @@ void *user_input(void *arg) {
             scanf("%d", &new_status);
             getchar(); // Consumir el carácter de nueva línea residual en el búfer de entrada
             if (new_status >= 0 && new_status <= 2) {
-                update_user_status(sock, (char *)arg, new_status);
+                update_user_status(sock, username, new_status);
             } else {
                 printf("Invalid status.\n");
             }
@@ -241,7 +246,7 @@ void *user_input(void *arg) {
         } else if (strcmp(command, "exit") == 0) {
             unregister_user(sock, username);
             close(sock);
-            exit_requested = 1; // Establece el indicador de salida
+            //exit_requested = 1; // Establece el indicador de salida
             break;
         } else {
             printf("Unknown command.\n");
