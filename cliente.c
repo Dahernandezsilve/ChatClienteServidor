@@ -218,7 +218,7 @@ void *user_input(void *args_ptr) {
     const char *username = args->username;
     char command[BUFFER_SIZE];
     while (1) {
-        printf("Enter command (send/list/info/status/help/exit): ");
+        printf("> Enter command (send/list/info/status/help/exit): ");
         fgets(command, BUFFER_SIZE, stdin);
         command[strcspn(command, "\n")] = 0;
 
