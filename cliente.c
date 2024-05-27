@@ -37,7 +37,7 @@ Chat__Response* receive_response(int sock) {
         perror("Receive failed");
         return NULL;
     }
-    printf("Received response, length: %d\n", n); // Depuración
+    printf("\nReceived response, length: %d\n", n); // Depuración
     return chat__response__unpack(NULL, n, buffer);
 }
 
@@ -135,7 +135,6 @@ void list_connected_users(int sock) {
 
 void *message_receiver(void *arg) {
     int sock = *((int *)arg);
-    printf("hola\n");
     while (!exit_requested) { // Hilo sigue en ejecución hasta que se solicite la salida
         struct timeval tv;
         tv.tv_sec = 1; // Espera 1 segundo
@@ -153,7 +152,6 @@ void *message_receiver(void *arg) {
             continue; // No hay actividad, intenta de nuevo
         } else {
             Chat__Response *response = receive_response(sock);
-            printf("hola\n");
             if (response) {
                 if (response->result_case != CHAT__RESPONSE__RESULT_INCOMING_MESSAGE) {
                     break; // Salir del bucle si no es un mensaje entrante
