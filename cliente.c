@@ -12,6 +12,11 @@
 char username[50];
 int exit_requested = 0;
 
+struct ThreadArgs {
+    int sock;
+    const char *username;
+};
+
 void send_request(int sock, Chat__Request *request) {
     uint8_t buffer[BUFFER_SIZE];
     unsigned len = chat__request__pack(request, buffer);
@@ -206,8 +211,10 @@ void unregister_user(int sock, const char *username_to_unregister) {
     exit(0);
 }
 
-void *user_input(void *arg) {
-    int sock = *((int *)arg);
+void *user_input(void *args_ptr) {
+    struct ThreadArgs *args = (struct ThreadArgs *)args_ptr;
+    int sock = args->sock;
+    const char *username = args->username;
     char command[BUFFER_SIZE];
     while (1) {
         printf("Enter command (send/list/info/status/help/exit): ");
@@ -259,6 +266,9 @@ void *user_input(void *arg) {
 }
 
 
+
+
+
 int main(int argc, char *argv[]) {
     if (argc < 4) {
         fprintf(stderr, "Usage: %s <username> <server_ip> <server_port>\n", argv[0]);
@@ -271,6 +281,8 @@ int main(int argc, char *argv[]) {
 
     int sock;
     struct sockaddr_in server_addr;
+
+    
 
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Socket creation error");
@@ -292,10 +304,11 @@ int main(int argc, char *argv[]) {
     printf("Connected to server %s:%d\n", server_ip, server_port); // Depuración
 
     register_user(sock, username);
+    struct ThreadArgs args = {sock, username};
 
     pthread_t receiver_thread, input_thread;
     if (pthread_create(&receiver_thread, NULL, message_receiver, (void *)&sock) != 0 ||
-        pthread_create(&input_thread, NULL, user_input, (void *)&sock) != 0) {
+        pthread_create(&input_thread, NULL, user_input, &args) != 0) {
         perror("Failed to create threads");
         return 1;
     }

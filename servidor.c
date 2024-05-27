@@ -68,7 +68,7 @@ void list_connected_users(int client_socket) {
         if (clients[i]) {
             Chat__User *user = malloc(sizeof(Chat__User));
             chat__user__init(user);
-            user->username = clients[i]->username;
+            user->username = strdup(clients[i]->username); // Duplicar la cadena de caracteres
             user->status = clients[i]->status; // Utiliza el estado real del usuario
             user_list.users[user_list.n_users++] = user;
         }
@@ -90,6 +90,7 @@ void list_connected_users(int client_socket) {
     }
 
     for (int i = 0; i < user_list.n_users; i++) {
+        free(user_list.users[i]->username); // Liberar la memoria de la cadena de caracteres duplicada
         free(user_list.users[i]);
     }
     free(user_list.users);
