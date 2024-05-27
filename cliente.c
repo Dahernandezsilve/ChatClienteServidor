@@ -92,7 +92,6 @@ void send_message(int sock, const char *recipient, const char *content) {
 
     printf("Sending message to: %s, content: %s\n", recipient, content); // Depuración
     send_request(sock, &request);
-
 }
 
 
@@ -136,7 +135,8 @@ void list_connected_users(int sock) {
 
 void *message_receiver(void *arg) {
     int sock = *((int *)arg);
-    while (1) { // Hilo sigue en ejecución indefinidamente
+    printf("hola\n");
+    while (!exit_requested) { // Hilo sigue en ejecución hasta que se solicite la salida
         struct timeval tv;
         tv.tv_sec = 1; // Espera 1 segundo
         tv.tv_usec = 0;
@@ -146,47 +146,50 @@ void *message_receiver(void *arg) {
         FD_SET(sock, &readfds);
 
         int activity = select(sock + 1, &readfds, NULL, NULL, &tv);
-        while (!exit_requested) {
-            if (activity < 0) {
-                perror("Select error");
-                break;
-            } else if (activity == 0) {
-                continue; // No hay actividad, intenta de nuevo
-            } else {
-                Chat__Response *response = receive_response(sock);
-                if (response) {
-                    switch (response->result_case) {
-                        case CHAT__RESPONSE__RESULT_INCOMING_MESSAGE:
-                            printf("Message received from %s: %s\n", response->incoming_message->sender, response->incoming_message->content);
-                            break;
-                        default:
-                            printf("Unknown response received. Response type: %d\n", response->result_case);
-                            // Imprimir el contenido de la respuesta
-                            uint8_t *response_buffer = NULL;
-                            unsigned response_len = chat__response__get_packed_size(response);
-                            response_buffer = malloc(response_len);
-                            if (response_buffer != NULL) {
-                                chat__response__pack(response, response_buffer);
-                                printf("Response content (hex): ");
-                                for (unsigned i = 0; i < response_len; ++i) {
-                                    printf("%02x ", response_buffer[i]);
-                                }
-                                printf("\n");
-                                free(response_buffer);
-                            }
-                            break;
-
-                    }
-                    chat__response__free_unpacked(response, NULL);
-                } else {
-                    printf("Failed to receive response\n");
-                    break;
+        if (activity < 0) {
+            perror("Select error");
+            break;
+        } else if (activity == 0) {
+            continue; // No hay actividad, intenta de nuevo
+        } else {
+            Chat__Response *response = receive_response(sock);
+            printf("hola\n");
+            if (response) {
+                if (response->result_case != CHAT__RESPONSE__RESULT_INCOMING_MESSAGE) {
+                    break; // Salir del bucle si no es un mensaje entrante
                 }
+                switch (response->result_case) {
+                    case CHAT__RESPONSE__RESULT_INCOMING_MESSAGE:
+                        printf("Message received from %s: %s\n", response->incoming_message->sender, response->incoming_message->content);
+                        break;
+                    default:
+                        printf("Unknown response received. Response type: %d\n", response->result_case);
+                        // Imprimir el contenido de la respuesta
+                        uint8_t *response_buffer = NULL;
+                        unsigned response_len = chat__response__get_packed_size(response);
+                        response_buffer = malloc(response_len);
+                        if (response_buffer != NULL) {
+                            chat__response__pack(response, response_buffer);
+                            printf("Response content (hex): ");
+                            for (unsigned i = 0; i < response_len; ++i) {
+                                printf("%02x ", response_buffer[i]);
+                            }
+                            printf("\n");
+                            free(response_buffer);
+                        }
+                        break;
+                }
+                chat__response__free_unpacked(response, NULL);
+
+            } else {
+                printf("Failed to receive response\n");
+                break;
             }
         }
     }
     return NULL;
 }
+
 
 void unregister_user(int sock, const char *username_to_unregister) {
     Chat__User unregister_user_req = CHAT__USER__INIT;
