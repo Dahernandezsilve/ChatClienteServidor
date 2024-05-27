@@ -9,6 +9,7 @@
 
 #define MAX_CLIENTS 100
 #define BUFFER_SIZE 1024
+#define MAX_QUEUE_SIZE 100 // Tamaño máximo de la cola
 
 typedef struct {
     int socket;
@@ -18,6 +19,75 @@ typedef struct {
 
 client_t *clients[MAX_CLIENTS];
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Estructura para una respuesta en la cola
+typedef struct {
+    Chat__Response *response;
+} ResponseQueueItem;
+
+
+typedef struct {
+    ResponseQueueItem items[MAX_QUEUE_SIZE];
+    int front, rear;
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+} ResponseQueue;
+
+// Definición de la cola global
+ResponseQueue response_queue;
+
+
+// Inicializar la cola
+void response_queue_init(ResponseQueue *queue) {
+    queue->front = 0;
+    queue->rear = 0;
+    pthread_mutex_init(&queue->mutex, NULL);
+    pthread_cond_init(&queue->not_empty, NULL);
+    pthread_cond_init(&queue->not_full, NULL);
+}
+
+// Insertar una respuesta en la cola
+void response_queue_push(ResponseQueue *queue, Chat__Response *response) {
+    pthread_mutex_lock(&queue->mutex);
+    while ((queue->rear + 1) % MAX_QUEUE_SIZE == queue->front) {
+        pthread_cond_wait(&queue->not_full, &queue->mutex);
+    }
+    queue->items[queue->rear].response = response;
+    queue->rear = (queue->rear + 1) % MAX_QUEUE_SIZE;
+    pthread_cond_signal(&queue->not_empty);
+    pthread_mutex_unlock(&queue->mutex);
+}
+
+// Sacar una respuesta de la cola
+Chat__Response *response_queue_pop(ResponseQueue *queue) {
+    pthread_mutex_lock(&queue->mutex);
+    while (queue->front == queue->rear) {
+        pthread_cond_wait(&queue->not_empty, &queue->mutex);
+    }
+    Chat__Response *response = queue->items[queue->front].response;
+    queue->front = (queue->front + 1) % MAX_QUEUE_SIZE;
+    pthread_cond_signal(&queue->not_full);
+    pthread_mutex_unlock(&queue->mutex);
+    return response;
+}
+
+// Función para liberar memoria de una respuesta de la cola
+void response_queue_item_free(ResponseQueueItem *item) {
+    chat__response__free_unpacked(item->response, NULL);
+}
+
+// Función para liberar memoria de todos los elementos de la cola
+void response_queue_destroy(ResponseQueue *queue) {
+    pthread_mutex_destroy(&queue->mutex);
+    pthread_cond_destroy(&queue->not_empty);
+    pthread_cond_destroy(&queue->not_full);
+    while (queue->front != queue->rear) {
+        response_queue_item_free(&queue->items[queue->front]);
+        queue->front = (queue->front + 1) % MAX_QUEUE_SIZE;
+    }
+}
+
 
 void add_client(client_t *client) {
     pthread_mutex_lock(&clients_mutex);
@@ -130,6 +200,46 @@ void send_private_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
     pthread_mutex_unlock(&clients_mutex);
 }
 
+void send_general_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i]) {
+            // Crear un mensaje de respuesta
+            Chat__Response response = CHAT__RESPONSE__INIT;
+            response.operation = CHAT__OPERATION__SEND_MESSAGE;
+            response.status_code = CHAT__STATUS_CODE__OK;
+            response.result_case = CHAT__RESPONSE__RESULT_INCOMING_MESSAGE;
+
+            // Crear y llenar el mensaje de respuesta
+            Chat__IncomingMessageResponse *incoming_msg = malloc(sizeof(Chat__IncomingMessageResponse));
+            chat__incoming_message_response__init(incoming_msg);
+            incoming_msg->sender = strdup(sender->username); // Establecer el remitente
+            incoming_msg->content = strdup(msg_req->content);
+            incoming_msg->type = CHAT__MESSAGE_TYPE__BROADCAST; // Indicar que es un mensaje general
+
+            // Establecer el mensaje de respuesta en el campo correspondiente
+            response.incoming_message = incoming_msg;
+
+            // Empaquetar y enviar el mensaje de respuesta
+            uint8_t buffer[BUFFER_SIZE];
+            unsigned len = chat__response__pack(&response, buffer);
+            if (send(clients[i]->socket, buffer, len, 0) < 0) {
+                perror("Send failed");
+            } else {
+                printf("General message sent from %s\n", sender->username);
+            }
+
+            // Liberar la memoria utilizada
+            free(incoming_msg->sender);
+            free(incoming_msg->content);
+            free(incoming_msg);
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
+}
+
+
+
 void *handle_client(void *arg) {
     client_t *cli = (client_t *)arg;
     uint8_t buffer[BUFFER_SIZE];
@@ -155,8 +265,13 @@ void *handle_client(void *arg) {
                 list_connected_users(cli->socket);
                 break;
             case CHAT__OPERATION__SEND_MESSAGE:
-                printf("Handling SEND_MESSAGE request\n");
-                send_private_message(cli, request->send_message);
+                if (request->send_message->recipient != NULL && strlen(request->send_message->recipient) > 0) {
+                    printf("Handling SEND_MESSAGE request\n");
+                    send_private_message(cli, request->send_message);
+                } else {
+                    printf("Handling SEND_GENERAL_MESSAGE request\n");
+                    send_general_message(cli, request->send_message);
+                }
                 break;
             case CHAT__OPERATION__UPDATE_STATUS:
                 printf("Handling UPDATE_STATUS request\n"); // Depuración

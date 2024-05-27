@@ -38,6 +38,27 @@ typedef struct {
 // Definición de la cola global
 ResponseQueue response_queue;
 
+#define MAX_HISTORY_SIZE 100
+
+typedef struct {
+    char sender[50];
+    char content[BUFFER_SIZE];
+} GeneralChatMessage;
+
+GeneralChatMessage general_chat_history[MAX_HISTORY_SIZE];
+int history_index = 0;
+
+void add_to_general_chat_history(const char *sender, const char *content) {
+    strncpy(general_chat_history[history_index].sender, sender, 50);
+    strncpy(general_chat_history[history_index].content, content, BUFFER_SIZE);
+    history_index = (history_index + 1) % MAX_HISTORY_SIZE;
+    printf("\n--- General Chat ---\n");
+    for (int i = 0; i < MAX_HISTORY_SIZE; ++i) {
+        if (strlen(general_chat_history[i].content) > 0) {
+            printf("%s: %s\n", general_chat_history[i].sender, general_chat_history[i].content);
+        }
+    }
+}
 
 // Inicializar la cola
 void response_queue_init(ResponseQueue *queue) {
@@ -199,7 +220,17 @@ void *message_receiver(void *arg) {
         } else {
             Chat__Response *response = receive_response(sock);
             if (response) {
-                response_queue_push(&response_queue, response);
+                printf("Response result_case: %d - %d\n", response->result_case, CHAT__RESPONSE__RESULT_INCOMING_MESSAGE); // Depuración
+                printf("Response result_case: %d - %d\n", response->incoming_message->type, CHAT__MESSAGE_TYPE__BROADCAST);
+                if (response->result_case == CHAT__RESPONSE__RESULT_INCOMING_MESSAGE &&
+                    response->incoming_message->type == CHAT__MESSAGE_TYPE__BROADCAST) {
+                    printf("ingresa");
+                    fflush(stdout); 
+                    add_to_general_chat_history(response->incoming_message->sender, response->incoming_message->content);
+                }  else {
+                    // Agrega la respuesta a la cola general si no es un mensaje general
+                    response_queue_push(&response_queue, response);
+                }
             } else {
                 printf("Failed to receive response\n");
                 break;
@@ -234,12 +265,37 @@ void unregister_user(int sock, const char *username_to_unregister) {
     exit(0);
 }
 
+void handleGeneralChat(int sock) {
+    char command[BUFFER_SIZE];
+
+    while (1) {
+
+        printf("\nCommands: send, exit\n");
+        printf("> Enter command: ");
+        fgets(command, BUFFER_SIZE, stdin);
+        command[strcspn(command, "\n")] = 0;
+
+        if (strcmp(command, "send") == 0) {
+            char message[BUFFER_SIZE];
+            printf("Enter message: ");
+            fgets(message, BUFFER_SIZE, stdin);
+            message[strcspn(message, "\n")] = 0;
+            send_message(sock, "", message);  // Enviar mensaje al chat general
+        } else if (strcmp(command, "exit") == 0) {
+            break;
+        } else {
+            printf("Unknown command.\n");
+        }
+    }
+}
+
+
 void *user_input(void *args_ptr) {
     struct ThreadArgs *args = (struct ThreadArgs *)args_ptr;
     int sock = args->sock;
     const char *username = args->username;
     char command[BUFFER_SIZE];
-    printf("> Enter command (send/list/info/status/help/exit): ");
+    printf("> Enter command (send/general/list/info/status/help/exit): ");
     while (1) {       
         fgets(command, BUFFER_SIZE, stdin);
         command[strcspn(command, "\n")] = 0;
@@ -256,6 +312,9 @@ void *user_input(void *args_ptr) {
             fgets(message, BUFFER_SIZE, stdin);
             message[strcspn(message, "\n")] = 0;
             send_message(sock, recipient, message);
+        } else if (strcmp(command, "general") == 0){
+            printSend = true;
+            handleGeneralChat(sock);
         } else if (strcmp(command, "list") == 0) {
             list_connected_users(sock);
         } else if (strcmp(command, "info") == 0) {
@@ -345,9 +404,11 @@ int main(int argc, char *argv[]) {
     Chat__Response *response = response_queue_pop(&response_queue);
     if (response) {
         if (response->result_case == CHAT__RESPONSE__RESULT_INCOMING_MESSAGE){
-            printf("Message received from %s: %s\n", response->incoming_message->sender, response->incoming_message->content);
-            fflush(stdout); // Limpiar el búfer de salida
-            print_command_prompt = true;
+            if (response->incoming_message && response->incoming_message->type && response->incoming_message->type != 0){
+                printf("Message received from %s: %s\n", response->incoming_message->sender, response->incoming_message->content);
+                fflush(stdout); // Limpiar el búfer de salida
+                print_command_prompt = true;
+            }
         }
         if (response->result_case == CHAT__RESPONSE__RESULT_USER_LIST) {
             printf("Connected users: %ld\n", response->user_list->n_users); 
