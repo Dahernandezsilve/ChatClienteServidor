@@ -171,8 +171,24 @@ void *handle_client(void *arg) {
                 // ...
                 break;
             case CHAT__OPERATION__UNREGISTER_USER:
-                // Manejar solicitud de desconectar usuario
-                // ...
+                printf("Handling UNREGISTER_USER request for client %s\n", cli->username);
+                
+                Chat__Response response = CHAT__RESPONSE__INIT;
+                response.operation = CHAT__OPERATION__UNREGISTER_USER;
+                response.status_code = CHAT__STATUS_CODE__OK;
+                response.message = "User unregistered successfully";
+                unsigned len = chat__response__pack(&response, buffer);
+
+                if (send(cli->socket, buffer, len, 0) < 0) {
+                    perror("Send failed");
+                } else {
+                    printf("Unregister response sent successfully\n");
+                }
+
+                close(cli->socket);
+                remove_client(cli);
+                free(cli);
+                pthread_exit(NULL);
                 break;
             default:
                 printf("Unknown operation: %d\n", request->operation); // Depuración
@@ -200,8 +216,6 @@ int username_exists(const char *username) {
     pthread_mutex_unlock(&clients_mutex);
     return 0;
 }
-
-
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -320,8 +334,29 @@ int main(int argc, char *argv[]) {
                 // ...
                 break;
             case CHAT__OPERATION__UNREGISTER_USER:
-                // Manejar solicitud de desconectar usuario
-                // ...
+                {
+                    const char *username = request->unregister_user->username;
+                    printf("Handling UNREGISTER_USER request for client %s\n", username);
+
+                    pthread_mutex_lock(&clients_mutex);
+                    for (int i = 0; i < MAX_CLIENTS; i++) {
+                        if (clients[i] && strcmp(clients[i]->username, username) == 0) {
+                            // Cerrar el socket y eliminar al cliente
+                            close(clients[i]->socket);
+                            free(clients[i]);
+                            clients[i] = NULL;
+                            break;
+                        }
+                    }
+                    pthread_mutex_unlock(&clients_mutex);
+
+                    Chat__Response response = CHAT__RESPONSE__INIT;
+                    response.operation = CHAT__OPERATION__UNREGISTER_USER;
+                    response.status_code = CHAT__STATUS_CODE__OK;
+                    response.message = "User unregistered successfully";
+                    unsigned len = chat__response__pack(&response, buffer);
+                    send(client_socket, buffer, len, 0);
+                }
                 break;
             default:
                 printf("Unknown initial operation: %d\n", request->operation); // Depuración

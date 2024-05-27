@@ -9,6 +9,9 @@
 
 #define BUFFER_SIZE 1024
 
+char username[50];
+int exit_requested = 0;
+
 void send_request(int sock, Chat__Request *request) {
     uint8_t buffer[BUFFER_SIZE];
     unsigned len = chat__request__pack(request, buffer);
@@ -138,6 +141,7 @@ void *message_receiver(void *arg) {
         FD_SET(sock, &readfds);
 
         int activity = select(sock + 1, &readfds, NULL, NULL, &tv);
+        if (exit_requested) break; // Sal del bucle si se ha solicitado la salida
         if (activity < 0) {
             perror("Select error");
             break;
@@ -178,6 +182,25 @@ void *message_receiver(void *arg) {
     return NULL;
 }
 
+void unregister_user(int sock, const char *username_to_unregister) {
+    Chat__User unregister_user_req = CHAT__USER__INIT;
+    unregister_user_req.username = (char *)username_to_unregister;
+
+    Chat__Request request = CHAT__REQUEST__INIT;
+    request.operation = CHAT__OPERATION__UNREGISTER_USER;
+    request.payload_case = CHAT__REQUEST__PAYLOAD_UNREGISTER_USER;
+    request.unregister_user = &unregister_user_req;
+
+    printf("Unregistering user: %s\n", username_to_unregister); // Depuración
+    send_request(sock, &request);
+
+    Chat__Response *response = receive_response(sock);
+    if (response) {
+        printf("Server response: %s\n", response->message);
+        chat__response__free_unpacked(response, NULL);
+    }
+}
+
 void *user_input(void *arg) {
     int sock = *((int *)arg);
     char command[BUFFER_SIZE];
@@ -214,8 +237,11 @@ void *user_input(void *arg) {
             }
         } else if (strcmp(command, "help") == 0) {
             printf("Help incoming!\n");
-            printf("Available commands:\nsend - Send public or private messages.\nlist - The list of users using the chat.\nstatus - Change your current status.\ninfo - Look for some user's info.\nexit - Unregister/Log out.\n");
+            printf("Available commands:\nsend - Send public or private messages. If you choose to send a private message\nYou must declare the receiver and the content of your message.\nlist - The list of users using the chat.\nstatus - Change your current status.\ninfo - Look for some user's info.\nexit - Unregister/Log out.\n");
         } else if (strcmp(command, "exit") == 0) {
+            unregister_user(sock, username);
+            close(sock);
+            exit_requested = 1; // Establece el indicador de salida
             break;
         } else {
             printf("Unknown command.\n");
