@@ -290,6 +290,19 @@ void handleGeneralChat(int sock) {
 }
 
 
+void get_user_info(int sock, const char *username) {
+    Chat__UserListRequest user_info_req = CHAT__USER_LIST_REQUEST__INIT;
+    user_info_req.username = (char *)username;
+
+    Chat__Request request = CHAT__REQUEST__INIT;
+    request.operation = CHAT__OPERATION__GET_USERS;
+    request.payload_case = CHAT__REQUEST__PAYLOAD_GET_USERS;
+    request.get_users = &user_info_req;
+
+    printf("Requesting information for user: %s\n", username);
+    send_request(sock, &request);
+}
+
 void *user_input(void *args_ptr) {
     struct ThreadArgs *args = (struct ThreadArgs *)args_ptr;
     int sock = args->sock;
@@ -318,7 +331,12 @@ void *user_input(void *args_ptr) {
         } else if (strcmp(command, "list") == 0) {
             list_connected_users(sock);
         } else if (strcmp(command, "info") == 0) {
-            printf("Under construction.\n");
+            //printf("Under construction.\n");
+            char username[BUFFER_SIZE];
+            printf("Enter username: ");
+            fgets(username, BUFFER_SIZE, stdin);
+            username[strcspn(username, "\n")] = 0;
+            get_user_info(sock, username);
         } else if (strcmp(command, "status") == 0) {
             int new_status;
             printf("Enter new status (0 for online, 1 for busy, 2 for offline): ");

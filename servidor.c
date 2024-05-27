@@ -14,6 +14,7 @@
 typedef struct {
     int socket;
     char username[50];
+    char ip_address[INET_ADDRSTRLEN];
     Chat__UserStatus status;
 } client_t;
 
@@ -261,8 +262,59 @@ void *handle_client(void *arg) {
                 // Este caso ya está manejado en la función main.
                 break;
             case CHAT__OPERATION__GET_USERS:
-                printf("Handling GET_USERS request\n"); // Depuración
+                /**printf("Handling GET_USERS request\n"); // Depuración
                 list_connected_users(cli->socket);
+                break;*/
+                printf("Handling GET_USERS request\n"); // Depuración
+
+                const char *username = request->get_users->username;
+                if (username && strlen(username) > 0) {
+                    // Solicitud para obtener información de un usuario específico
+                    printf("Handling GET_USER_INFO request for user: %s\n", username);
+
+                    Chat__Response response = CHAT__RESPONSE__INIT;
+                    response.operation = CHAT__OPERATION__GET_USERS;
+
+                    // Buscar la información del usuario solicitado
+                    pthread_mutex_lock(&clients_mutex);
+                    for (int i = 0; i < MAX_CLIENTS; i++) {
+                        if (clients[i] && strcmp(clients[i]->username, username) == 0) {
+                            // Usuario encontrado, devolver su información
+                            response.status_code = CHAT__STATUS_CODE__OK;
+                            response.message = "User information retrieved successfully";
+
+                            Chat__UserListResponse user_info = CHAT__USER_LIST_RESPONSE__INIT;
+                            user_info.type = CHAT__USER_LIST_TYPE__SINGLE;
+                            user_info.n_users = 1;
+                            user_info.users = malloc(sizeof(Chat__User*));
+
+                            Chat__User *user = malloc(sizeof(Chat__User));
+                            chat__user__init(user);
+                            user->username = strdup(clients[i]->username);
+                            user->status = clients[i]->status;
+                            user_info.users[0] = user;
+
+                            response.result_case = CHAT__RESPONSE__RESULT_USER_LIST;
+                            response.user_list = &user_info;
+
+                            break;
+                        }
+                    }
+                    pthread_mutex_unlock(&clients_mutex);
+
+                    if (response.status_code == CHAT__STATUS_CODE__OK) {
+                        unsigned len = chat__response__pack(&response, buffer);
+                        send(cli->socket, buffer, len, 0);
+                    } else {
+                        response.status_code = CHAT__STATUS_CODE__BAD_REQUEST;
+                        response.message = "User not found";
+                        unsigned len = chat__response__pack(&response, buffer);
+                        send(cli->socket, buffer, len, 0);
+                    }
+                } else {
+                    // Solicitud para obtener la lista de todos los usuarios conectados
+                    list_connected_users(cli->socket);
+                }
                 break;
             case CHAT__OPERATION__SEND_MESSAGE:
                 if (request->send_message->recipient != NULL && strlen(request->send_message->recipient) > 0) {
@@ -376,8 +428,14 @@ int main(int argc, char *argv[]) {
             perror("Accept failed");
             continue;
         }
+        // Crear una nueva instancia de client_t para almacenar la información del cliente
+        client_t *new_client = (client_t *)malloc(sizeof(client_t));
+        new_client->socket = client_socket;
 
-        printf("New client connected\n"); // Mensaje de depuración
+        // Obtener la dirección IP del cliente
+        inet_ntop(AF_INET, &(client_addr.sin_addr), new_client->ip_address, INET_ADDRSTRLEN);
+
+        printf("New client connected with IP: %s\n", new_client->ip_address); // Mensaje de depuración
 
         uint8_t buffer[BUFFER_SIZE];
         int n = recv(client_socket, buffer, BUFFER_SIZE, 0);
