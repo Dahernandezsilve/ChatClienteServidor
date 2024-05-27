@@ -228,7 +228,7 @@ int main(int argc, char *argv[]) {
     int server_socket, client_socket;
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_len;
-    pthread_t tid;
+    //pthread_t tid;
 
     // Create socket
     if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -295,6 +295,7 @@ int main(int argc, char *argv[]) {
                         send(client_socket, buffer, len, 0);
                         close(client_socket);
                     } else {
+                        pthread_t tid;
                         client_t *cli = (client_t *)malloc(sizeof(client_t));
                         cli->socket = client_socket;
                         strncpy(cli->username, username, sizeof(cli->username));

@@ -149,3 +149,17 @@ cliente.c:196:9: warning: implicit declaration of function ‘pthread_create’ 
 cliente.c:236:5: warning: implicit declaration of function ‘pthread_join’ [-Wimplicit-function-declaration]
   236 |     pthread_join(receiver_thread, NULL);
       |     ^~~~~~~~~~~~
+
+
+> Enter command (send/list/info/status/help/exit): send
+Command entered: send
+Enter recipient: Diego
+Enter message: D
+Sending message to: Diego, content: D
+Sending request, operation: 1, length: 14
+Request sent successfully
+> Enter command (send/list/info/status/help/exit): 
+Received response, length: 19
+Message received from : �K���
+cliente: chat.pb-c.c:412: chat__response__free_unpacked: Assertion `message->base.descriptor == &chat__response__descriptor' failed.
+Aborted (core dumped)

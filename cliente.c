@@ -3,19 +3,93 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <stdbool.h> 
 #include <arpa/inet.h>
 #include <protobuf-c/protobuf-c.h>
 #include "chat.pb-c.h"
 
 #define BUFFER_SIZE 1024
+#define MAX_QUEUE_SIZE 100 // Tamaño máximo de la cola
 
 char username[50];
 int exit_requested = 0;
+bool unregister = false;
+bool printSend = false;
 
 struct ThreadArgs {
     int sock;
     const char *username;
 };
+
+// Estructura para una respuesta en la cola
+typedef struct {
+    Chat__Response *response;
+} ResponseQueueItem;
+
+
+typedef struct {
+    ResponseQueueItem items[MAX_QUEUE_SIZE];
+    int front, rear;
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+} ResponseQueue;
+
+// Definición de la cola global
+ResponseQueue response_queue;
+
+
+// Inicializar la cola
+void response_queue_init(ResponseQueue *queue) {
+    queue->front = 0;
+    queue->rear = 0;
+    pthread_mutex_init(&queue->mutex, NULL);
+    pthread_cond_init(&queue->not_empty, NULL);
+    pthread_cond_init(&queue->not_full, NULL);
+}
+
+// Insertar una respuesta en la cola
+void response_queue_push(ResponseQueue *queue, Chat__Response *response) {
+    pthread_mutex_lock(&queue->mutex);
+    while ((queue->rear + 1) % MAX_QUEUE_SIZE == queue->front) {
+        pthread_cond_wait(&queue->not_full, &queue->mutex);
+    }
+    queue->items[queue->rear].response = response;
+    queue->rear = (queue->rear + 1) % MAX_QUEUE_SIZE;
+    pthread_cond_signal(&queue->not_empty);
+    pthread_mutex_unlock(&queue->mutex);
+}
+
+// Sacar una respuesta de la cola
+Chat__Response *response_queue_pop(ResponseQueue *queue) {
+    pthread_mutex_lock(&queue->mutex);
+    while (queue->front == queue->rear) {
+        pthread_cond_wait(&queue->not_empty, &queue->mutex);
+    }
+    Chat__Response *response = queue->items[queue->front].response;
+    queue->front = (queue->front + 1) % MAX_QUEUE_SIZE;
+    pthread_cond_signal(&queue->not_full);
+    pthread_mutex_unlock(&queue->mutex);
+    return response;
+}
+
+// Función para liberar memoria de una respuesta de la cola
+void response_queue_item_free(ResponseQueueItem *item) {
+    chat__response__free_unpacked(item->response, NULL);
+}
+
+// Función para liberar memoria de todos los elementos de la cola
+void response_queue_destroy(ResponseQueue *queue) {
+    pthread_mutex_destroy(&queue->mutex);
+    pthread_cond_destroy(&queue->not_empty);
+    pthread_cond_destroy(&queue->not_full);
+    while (queue->front != queue->rear) {
+        response_queue_item_free(&queue->items[queue->front]);
+        queue->front = (queue->front + 1) % MAX_QUEUE_SIZE;
+    }
+}
+
+
 
 void send_request(int sock, Chat__Request *request) {
     uint8_t buffer[BUFFER_SIZE];
@@ -37,7 +111,7 @@ Chat__Response* receive_response(int sock) {
         perror("Receive failed");
         return NULL;
     }
-    printf("\nReceived response, length: %d\n", n); // Depuración
+    printf("Received response, length: %d\n", n); // Depuración
     return chat__response__unpack(NULL, n, buffer);
 }
 
@@ -54,11 +128,7 @@ void update_user_status(int sock, const char *username, Chat__UserStatus new_sta
     printf("Updating status for user: %s\n", username); // Depuración
     send_request(sock, &request);
 
-    Chat__Response *response = receive_response(sock);
-    if (response) {
-        printf("Server response: %s\n", response->message);
-        chat__response__free_unpacked(response, NULL);
-    }
+
 }
 
 void register_user(int sock, const char *username) {
@@ -92,6 +162,8 @@ void send_message(int sock, const char *recipient, const char *content) {
 
     printf("Sending message to: %s, content: %s\n", recipient, content); // Depuración
     send_request(sock, &request);
+    printSend = true;
+    printf("> Enter command (send/list/info/status/help/exit): ");
 }
 
 
@@ -105,32 +177,6 @@ void list_connected_users(int sock) {
 
     printf("Requesting list of connected users\n"); // Depuración
     send_request(sock, &request);
-
-    // Espera un tiempo limitado para recibir la respuesta del servidor
-    fd_set readfds;
-    FD_ZERO(&readfds);
-    FD_SET(sock, &readfds);
-    struct timeval timeout;
-    timeout.tv_sec = 5; // Espera 5 segundos
-    timeout.tv_usec = 0;
-
-    int activity = select(sock + 1, &readfds, NULL, NULL, &timeout);
-    if (activity == -1) {
-        perror("Select error");
-    } else if (activity == 0) {
-        printf("No response from server.\n");
-    } else {
-        Chat__Response *response = receive_response(sock);
-        if (response && response->result_case == CHAT__RESPONSE__RESULT_USER_LIST) {
-            printf("Connected users:\n"); // Depuración
-            for (size_t i = 0; i < response->user_list->n_users; ++i) {
-                printf("User: %s, Status: %d\n", response->user_list->users[i]->username, response->user_list->users[i]->status);
-            }
-            chat__response__free_unpacked(response, NULL);
-        } else {
-            printf("Failed to get user list or incorrect response format\n"); // Depuración
-        }
-    }
 }
 
 void *message_receiver(void *arg) {
@@ -153,32 +199,7 @@ void *message_receiver(void *arg) {
         } else {
             Chat__Response *response = receive_response(sock);
             if (response) {
-                if (response->result_case != CHAT__RESPONSE__RESULT_INCOMING_MESSAGE) {
-                    break; // Salir del bucle si no es un mensaje entrante
-                }
-                switch (response->result_case) {
-                    case CHAT__RESPONSE__RESULT_INCOMING_MESSAGE:
-                        printf("Message received from %s: %s\n", response->incoming_message->sender, response->incoming_message->content);
-                        break;
-                    default:
-                        printf("Unknown response received. Response type: %d\n", response->result_case);
-                        // Imprimir el contenido de la respuesta
-                        uint8_t *response_buffer = NULL;
-                        unsigned response_len = chat__response__get_packed_size(response);
-                        response_buffer = malloc(response_len);
-                        if (response_buffer != NULL) {
-                            chat__response__pack(response, response_buffer);
-                            printf("Response content (hex): ");
-                            for (unsigned i = 0; i < response_len; ++i) {
-                                printf("%02x ", response_buffer[i]);
-                            }
-                            printf("\n");
-                            free(response_buffer);
-                        }
-                        break;
-                }
-                chat__response__free_unpacked(response, NULL);
-
+                response_queue_push(&response_queue, response);
             } else {
                 printf("Failed to receive response\n");
                 break;
@@ -204,6 +225,7 @@ void unregister_user(int sock, const char *username_to_unregister) {
     Chat__Response *response = receive_response(sock);
     if (response) {
         printf("Server response: %s\n", response->message);
+        unregister = true;
         chat__response__free_unpacked(response, NULL);
     }
 
@@ -217,8 +239,8 @@ void *user_input(void *args_ptr) {
     int sock = args->sock;
     const char *username = args->username;
     char command[BUFFER_SIZE];
-    while (1) {
-        printf("> Enter command (send/list/info/status/help/exit): ");
+    printf("> Enter command (send/list/info/status/help/exit): ");
+    while (1) {       
         fgets(command, BUFFER_SIZE, stdin);
         command[strcspn(command, "\n")] = 0;
 
@@ -259,6 +281,7 @@ void *user_input(void *args_ptr) {
         } else {
             printf("Unknown command.\n");
         }
+        
 
         // Limpiar el búfer de entrada para evitar problemas de lectura
         fflush(stdin);
@@ -282,7 +305,7 @@ int main(int argc, char *argv[]) {
 
     int sock;
     struct sockaddr_in server_addr;
-
+    response_queue_init(&response_queue);
     
 
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -313,6 +336,44 @@ int main(int argc, char *argv[]) {
         perror("Failed to create threads");
         return 1;
     }
+
+    while (!exit_requested) {
+    // Determinar si se necesita imprimir el mensaje de comando
+    bool print_command_prompt = false;
+
+    // Comprobar si hay respuestas en la cola
+    Chat__Response *response = response_queue_pop(&response_queue);
+    if (response) {
+        if (response->result_case == CHAT__RESPONSE__RESULT_INCOMING_MESSAGE){
+            printf("Message received from %s: %s\n", response->incoming_message->sender, response->incoming_message->content);
+            fflush(stdout); // Limpiar el búfer de salida
+            print_command_prompt = true;
+        }
+        if (response->result_case == CHAT__RESPONSE__RESULT_USER_LIST) {
+            printf("Connected users: %ld\n", response->user_list->n_users); 
+            for (size_t i = 0; i < response->user_list->n_users; ++i) {
+                printf("User: %s, Status: %d\n", response->user_list->users[i]->username, response->user_list->users[i]->status);
+            }
+            print_command_prompt = true;
+        }
+        if (response->status_code && response->message && !print_command_prompt && !unregister) {
+            printf("Server response: %s\n ", response->message);
+        }
+        chat__response__free_unpacked(response, NULL);
+    }
+
+    if (!printSend) {
+        printf("> Enter command (send/list/info/status/help/exit): ");
+        fflush(stdout); // Asegurar que se imprima inmediatamente
+    }
+    printSend = false;
+    // Otro código del bucle principal, si es necesario
+    // ...
+
+    usleep(100000); // Esperar 100ms para evitar un uso excesivo de la CPU
+}
+
+
 
     pthread_join(receiver_thread, NULL);  
     pthread_join(input_thread, NULL);  
