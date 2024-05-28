@@ -15,6 +15,7 @@ char username[50];
 int exit_requested = 0;
 bool unregister = false;
 bool printSend = false;
+bool isInGeneral = false;
 
 struct ThreadArgs {
     int sock;
@@ -52,12 +53,6 @@ void add_to_general_chat_history(const char *sender, const char *content) {
     strncpy(general_chat_history[history_index].sender, sender, 50);
     strncpy(general_chat_history[history_index].content, content, BUFFER_SIZE);
     history_index = (history_index + 1) % MAX_HISTORY_SIZE;
-    printf("\n--- General Chat ---\n");
-    for (int i = 0; i < MAX_HISTORY_SIZE; ++i) {
-        if (strlen(general_chat_history[i].content) > 0) {
-            printf("%s: %s\n", general_chat_history[i].sender, general_chat_history[i].content);
-        }
-    }
 }
 
 // Inicializar la cola
@@ -132,7 +127,7 @@ Chat__Response* receive_response(int sock) {
         perror("Receive failed");
         return NULL;
     }
-    printf("Received response, length: %d\n", n); // Depuración
+    // printf("Received response, length: %d\n", n); // Depuración
     return chat__response__unpack(NULL, n, buffer);
 }
 
@@ -220,13 +215,21 @@ void *message_receiver(void *arg) {
         } else {
             Chat__Response *response = receive_response(sock);
             if (response) {
-                printf("Response result_case: %d - %d\n", response->result_case, CHAT__RESPONSE__RESULT_INCOMING_MESSAGE); // Depuración
-                printf("Response result_case: %d - %d\n", response->incoming_message->type, CHAT__MESSAGE_TYPE__BROADCAST);
+                // printf("Response result_case: %d - %d\n", response->result_case, CHAT__RESPONSE__RESULT_INCOMING_MESSAGE); // Depuración
+                // printf("Response result_case: %d - %d\n", response->incoming_message->type, CHAT__MESSAGE_TYPE__BROADCAST);
                 if (response->result_case == CHAT__RESPONSE__RESULT_INCOMING_MESSAGE &&
                     response->incoming_message->type == CHAT__MESSAGE_TYPE__BROADCAST) {
-                    printf("ingresa");
+                    // printf("ingresa");
                     fflush(stdout); 
                     add_to_general_chat_history(response->incoming_message->sender, response->incoming_message->content);
+                    if (isInGeneral) {
+                        printf("\n--- General Chat ---\n");
+                        for (int i = 0; i < MAX_HISTORY_SIZE; ++i) {
+                            if (strlen(general_chat_history[i].content) > 0) {
+                                printf("%s: %s\n", general_chat_history[i].sender, general_chat_history[i].content);
+                            }
+                        }
+                    }
                 }  else {
                     // Agrega la respuesta a la cola general si no es un mensaje general
                     response_queue_push(&response_queue, response);
@@ -267,9 +270,13 @@ void unregister_user(int sock, const char *username_to_unregister) {
 
 void handleGeneralChat(int sock) {
     char command[BUFFER_SIZE];
-
+    printf("\n--- General Chat ---\n");
+    for (int i = 0; i < MAX_HISTORY_SIZE; ++i) {
+        if (strlen(general_chat_history[i].content) > 0) {
+            printf("%s: %s\n", general_chat_history[i].sender, general_chat_history[i].content);
+        }
+    }
     while (1) {
-
         printf("\nCommands: send, exit\n");
         printf("> Enter command: ");
         fgets(command, BUFFER_SIZE, stdin);
@@ -281,7 +288,9 @@ void handleGeneralChat(int sock) {
             fgets(message, BUFFER_SIZE, stdin);
             message[strcspn(message, "\n")] = 0;
             send_message(sock, "", message);  // Enviar mensaje al chat general
+            printSend = true;
         } else if (strcmp(command, "exit") == 0) {
+            isInGeneral = false;
             break;
         } else {
             printf("Unknown command.\n");
@@ -327,6 +336,7 @@ void *user_input(void *args_ptr) {
             send_message(sock, recipient, message);
         } else if (strcmp(command, "general") == 0){
             printSend = true;
+            isInGeneral = true;
             handleGeneralChat(sock);
         } else if (strcmp(command, "list") == 0) {
             list_connected_users(sock);
