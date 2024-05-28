@@ -148,6 +148,7 @@ void list_connected_users(int client_socket) {
 
     Chat__Response response = CHAT__RESPONSE__INIT;
     response.operation = CHAT__OPERATION__GET_USERS;
+    response.status_code = CHAT__STATUS_CODE__OK;
     response.result_case = CHAT__RESPONSE__RESULT_USER_LIST;
     response.user_list = &user_list;
 
@@ -173,7 +174,7 @@ void send_private_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
         if (clients[i] && strcmp(clients[i]->username, msg_req->recipient) == 0) {
             // Crear un mensaje de respuesta
             Chat__Response response = CHAT__RESPONSE__INIT;
-            response.operation = CHAT__OPERATION__SEND_MESSAGE;
+            response.operation = CHAT__OPERATION__INCOMING_MESSAGE;
             response.status_code = CHAT__STATUS_CODE__OK;
             response.result_case = CHAT__RESPONSE__RESULT_INCOMING_MESSAGE;
             
@@ -198,6 +199,26 @@ void send_private_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
             break;
         }
     }
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i] && strcmp(clients[i]->username, sender->username) == 0) {
+            // Crear un mensaje de respuesta
+            Chat__Response response = CHAT__RESPONSE__INIT;
+            response.operation = CHAT__OPERATION__SEND_MESSAGE;
+            response.status_code = CHAT__STATUS_CODE__OK;
+            response.message = "Message delivered successfully";
+
+            // Empaquetar y enviar el mensaje de respuesta
+            uint8_t buffer[BUFFER_SIZE];
+            unsigned len = chat__response__pack(&response, buffer);
+            if (send(clients[i]->socket, buffer, len, 0) < 0) {
+                perror("Send failed");
+            } else {
+                printf("Confirmation sent to %s\n", sender->username);
+            }
+            break;
+        }
+    }
     pthread_mutex_unlock(&clients_mutex);
 }
 
@@ -207,7 +228,7 @@ void send_general_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
         if (clients[i]) {
             // Crear un mensaje de respuesta
             Chat__Response response = CHAT__RESPONSE__INIT;
-            response.operation = CHAT__OPERATION__SEND_MESSAGE;
+            response.operation = CHAT__OPERATION__INCOMING_MESSAGE;
             response.status_code = CHAT__STATUS_CODE__OK;
             response.result_case = CHAT__RESPONSE__RESULT_INCOMING_MESSAGE;
 
@@ -234,6 +255,26 @@ void send_general_message(client_t *sender, Chat__SendMessageRequest *msg_req) {
             free(incoming_msg->sender);
             free(incoming_msg->content);
             free(incoming_msg);
+        }
+    }
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i] && strcmp(clients[i]->username, sender->username) == 0) {
+            // Crear un mensaje de respuesta
+            Chat__Response response = CHAT__RESPONSE__INIT;
+            response.operation = CHAT__OPERATION__SEND_MESSAGE;
+            response.status_code = CHAT__STATUS_CODE__OK;
+            response.message = "Message delivered successfully";
+
+            // Empaquetar y enviar el mensaje de respuesta
+            uint8_t buffer[BUFFER_SIZE];
+            unsigned len = chat__response__pack(&response, buffer);
+            if (send(clients[i]->socket, buffer, len, 0) < 0) {
+                perror("Send failed");
+            } else {
+                printf("Confirmation sent to %s\n", sender->username);
+            }
+            break;
         }
     }
     pthread_mutex_unlock(&clients_mutex);
