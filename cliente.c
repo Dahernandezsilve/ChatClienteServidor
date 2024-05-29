@@ -179,7 +179,7 @@ void send_message(int sock, const char *recipient, const char *content) {
     printf("Sending message to: %s, content: %s\n", recipient, content); // Depuración
     send_request(sock, &request);
     printSend = true;
-    printf("> Enter command (send/list/info/status/help/exit): ");
+    printf("> Enter command (send/general/list/info/status/help/exit): ");
 }
 
 
@@ -359,7 +359,7 @@ void *user_input(void *args_ptr) {
             }
         } else if (strcmp(command, "help") == 0) {
             printf("Help incoming!\n");
-            printf("Available commands:\nsend - Send public or private messages. If you choose to send a private message\nYou must declare the receiver and the content of your message.\nlist - The list of users using the chat.\nstatus - Change your current status.\ninfo - Look for some user's info.\nexit - Unregister/Log out.\n");
+            printf("Available commands:\nsend - Send public or private messages. If you choose to send a private message\nYou must declare the receiver and the content of your message.\nlist - The list of users using the chat.\nstatus - Change your current status.\ninfo - Look for some user's info.\ngeneral - send - send a message for all - exit - exit from general chat.\nexit - Unregister/Log out.\n");
         } else if (strcmp(command, "exit") == 0) {
             unregister_user(sock, username);
             close(sock);
